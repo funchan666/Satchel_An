@@ -26,6 +26,8 @@ class PlayProducts(context: Context) {
     var activePurchases: List<Purchase> = emptyList(); private set
     var portalPurchases: ((List<Purchase>) -> Unit)? = null
     private var portalFlowResult: ((Int) -> Unit)? = null
+    private var connecting = false
+    private var closed = false
     private val main = Handler(Looper.getMainLooper())
     private val ownership = context.getSharedPreferences("play_a_ownership", Context.MODE_PRIVATE)
     private fun localAccountId(): String? {
@@ -55,12 +57,18 @@ class PlayProducts(context: Context) {
         .enableAutoServiceReconnection().build()
     fun connect() {
         if (key == null) { status = "Google Play verification is not configured yet."; return }
+        if (closed || connecting || client.isReady) return
+        connecting = true
         client.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(result: BillingResult) {
-                if (result.responseCode != BillingClient.BillingResponseCode.OK) { main.post { status = "Google Play is unavailable."; ready = false }; return }
-                refreshPurchases(); queryProducts()
+                main.post {
+                    connecting = false
+                    if (closed) return@post
+                    if (result.responseCode != BillingClient.BillingResponseCode.OK) { status = "Google Play is unavailable."; ready = false }
+                    else { refreshPurchases(); queryProducts() }
+                }
             }
-            override fun onBillingServiceDisconnected() { main.post { ready = false; status = "Google Play is disconnected." } }
+            override fun onBillingServiceDisconnected() { main.post { connecting = false; ready = false; status = "Google Play is disconnected." } }
         })
     }
     private fun valid(purchase: Purchase): Boolean = try {
@@ -76,7 +84,7 @@ class PlayProducts(context: Context) {
         }
     }
     fun refreshPurchases(onComplete: ((Boolean) -> Unit)? = null) {
-        if (key == null || !client.isReady) { onComplete?.invoke(false); return }
+        if (key == null || !client.isReady) { connect(); onComplete?.invoke(false); return }
         client.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.SUBS).build()) { result, purchases ->
             if (result.responseCode != BillingClient.BillingResponseCode.OK) { main.post { ready = false; status = "Could not check your membership. Please try again."; onComplete?.invoke(false) }; return@queryPurchasesAsync }
             val active = purchases.any { it.purchaseState == Purchase.PurchaseState.PURCHASED && it.products.any { id -> id in productIds } && valid(it) }
@@ -91,7 +99,7 @@ class PlayProducts(context: Context) {
         offer.offerId == null && phase != null && phase.billingPeriod == expectedPeriod && phase.recurrenceMode == ProductDetails.RecurrenceMode.INFINITE_RECURRING
     }
     fun queryProducts(onResult: ((List<PlayOffer>) -> Unit)? = null) {
-        if (key == null || !client.isReady) { onResult?.invoke(emptyList()); return }
+        if (key == null || !client.isReady) { connect(); onResult?.invoke(emptyList()); return }
         client.queryProductDetailsAsync(productQuery()) { result, details ->
             val values = if (result.responseCode == BillingClient.BillingResponseCode.OK) details.productDetailsList.mapNotNull { p ->
                 val offer = baseOffer(p); val phase = offer?.pricingPhases?.pricingPhaseList?.firstOrNull()
@@ -144,5 +152,5 @@ class PlayProducts(context: Context) {
             client.acknowledgePurchase(AcknowledgePurchaseParams.newBuilder().setPurchaseToken(token).build()) { ack -> main.post { result(ack.responseCode == BillingClient.BillingResponseCode.OK) } }
         }
     }
-    fun close() { client.endConnection() }
+    fun close() { closed = true; connecting = false; client.endConnection() }
 }
