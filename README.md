@@ -1,23 +1,13 @@
 # Satchel Android
 
-Kotlin / Jetpack Compose port based on the sibling Satchel iOS working tree. Original Satchel assets and nine language tables are reused. This is an Android Studio project; the Gradle wrapper and application module are included.
+Kotlin / Jetpack Compose port based on the sibling Satchel iOS working tree. Original Satchel assets and nine language tables are reused. This Android Studio project includes its Gradle wrapper.
 
-## Implemented in source
+The local travel journal, guest login, original H5 WebView/WebSocket and Google test advertising are implemented in source. The original provider's documented Google purchase endpoint is used for the H5 purchase path: the app saves a matching Google Play purchase, submits its token to the provider, checks the provider membership profile and acknowledges the Play purchase before reporting success. The original H5 and its provider are not modified. See [Android H5 integration](docs/ANDROID-H5-INTEGRATION.md) for the documented fields and unresolved provider behavior.
 
-- Local trips, favorites, search, suggested/copied packing lists, packing/return checks, items, journals, photos, next-time notes, common list and JSON export. The local scripted guide is not AI or live information.
-- At startup, the client attempts the reference guest login and release configuration alongside an app-open test ad. A valid H5 route opens a WebView and WebSocket; failure or initial-content timeout falls back to the local journal. The Android platform value and backend compatibility are unverified.
-- The socket handles the reference ad, product, status and restore requests and persists ad results for redelivery/ACK. Ads use Google's Android test IDs and UMP. H5/backend remains responsible for content quotas and reward application.
-- Google Play A-side membership implements product lookup, purchase launch, pending handling, signature verification, active-entitlement query, acknowledgement and restore. A purchase ownership marker is saved before launch; unknown transactions are not acknowledged as A-side purchases. Existing active Play subscriptions can still unlock the local A-side. Some Android-specific messages remain in English.
-- In-app legal drafts were adapted from the iOS drafts for Android and need operator contact details, review and publication. They are not final legal documents.
+The selected subscription IDs are `satchel_monthly` and `satchel_yearly`; the package ID is `com.satchel.traveljournal`. These are proposed and have not been registered. Create matching monthly/yearly auto-renewing subscriptions and configure the app's Google Play licensing public key through `SATCHEL_PLAY_PUBLIC_KEY`. Prices shown by the app come from Play. Developer API credentials, provider product mapping and renewal/refund handling must be configured and verified when the Play account exists.
 
-## Google Play setup
+The original online H5 determines its membership display from the provider profile, and its current playback quota code does not appear to consume membership. An endpoint declaration alone does not prove that Google verification, H5 membership, playback/download privileges or provider entitlement updates work. A returned/confirmed purchase whose provider status is not yet confirmed remains pending; a request with an uncertain result is not re-submitted until its idempotency is established. Existing A-side and B-side purchase ownership records are separate, and unknown transactions are not acknowledged as B-side purchases.
 
-The locally selected subscription IDs are `satchel_monthly` and `satchel_yearly`. Create each with a matching one-month or one-year auto-renewing base plan, prices and regions in the Play Console. IDs, availability and prices have not been registered or verified. The package ID `com.satchel.traveljournal` is provisional until registered. Supply the app's Base64 licensing public key through the Gradle property `SATCHEL_PLAY_PUBLIC_KEY`; purchase is unavailable until it is configured. The client displays Play's returned price. A-side local signature checks do not replace secure backend verification.
+The `server/` directory is an earlier standalone prototype retained for reference and is not connected to the Android app. AdMob uses test IDs; Android legal documents are drafts requiring review and operator contact details.
 
-## Still incomplete
-
-**H5 Google Play purchase and backend fulfillment are not implemented.** The existing provider code establishes only an Apple-receipt contract, and no Android order/verification contract has been supplied. The app returns an explicit failure to H5 instead of starting a payment it cannot fulfill; restore remains pending. See [Android H5 integration](docs/ANDROID-H5-INTEGRATION.md) for the exact handoff and recovery requirements. Production AdMob IDs, consent messages, service configuration and the server's renewal/refund/revocation handling also require setup.
-
-The local free limits are three trips, 30 referenced photos and one guide question per local calendar day; a verified active A-side Play membership removes them. Android and iOS local stores are separate; import or automatic migration is not implemented.
-
-No build, automated tests, emulator/device run, visual comparison, live service, ad, WebSocket or Google Play purchase validation was performed. The project is not a verified identical reproduction or ready for release.
+No build, automated tests, emulator/device run, visual comparison, backend deployment, live service integration, ad, WebSocket or Google Play purchase validation was performed. The project is not a verified identical reproduction or release-ready.

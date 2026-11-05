@@ -73,6 +73,14 @@ class PortalBackend(private val context: Context) {
         return PortalRoute(output, allowed).also { route = it }
     }
     suspend fun status(): Any = request("/app-api/member/user/get")
+    suspend fun confirmGooglePurchase(productId: String, purchaseToken: String, micros: Long, currency: String): Any {
+        if (productId !in listOf(MONTHLY, YEARLY) || purchaseToken.isBlank() || micros < 0) throw PortalFailure("invalid_purchase")
+        val cents = java.math.BigDecimal.valueOf(micros).divide(java.math.BigDecimal.valueOf(10_000), 0, java.math.RoundingMode.HALF_UP).toPlainString()
+        val body = JSONObject().put("rightsName", productId).put("price", cents).put("purchaseToken", purchaseToken)
+            .put("packageName", context.packageName).put("versionCode", BuildConfig.VERSION_NAME).put("payType", "2").put("source", "android")
+        if (currency == "USD") body.put("usdPrice", cents)
+        return request("/app-api/flow/rights-order/google/buy", body = body)
+    }
     suspend fun refresh(failedToken: String) = refreshLock.withLock {
         val old = session ?: throw PortalFailure("session_unavailable")
         if (old.token != failedToken) return@withLock

@@ -1,6 +1,9 @@
 package com.satchel.traveljournal
 
 import android.content.Context
+import android.app.Activity
+import com.android.billingclient.api.BillingClient
+import com.android.billingclient.api.Purchase
 import android.os.Handler
 import android.os.Looper
 import android.util.AtomicFile
@@ -10,13 +13,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import java.security.MessageDigest
+import java.time.Instant
+import java.util.UUID
 
-/** This relay follows the iOS envelope; purchase fulfillment remains gated until the provider's Android contract is known. */
-class PortalSocket(context: Context, private val backend: PortalBackend, private val ads: PortalAds, private val billing: PlayProducts) {
+/** The relay follows the iOS envelope and only reports Play purchases after backend verification. */
+class PortalSocket(private val activity: Activity, private val backend: PortalBackend, private val ads: PortalAds, private val billing: PlayProducts) {
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).pingInterval(30, TimeUnit.SECONDS).build()
-    private val ledger = AtomicFile(File(context.filesDir, "portal-operations.json"))
+    private val ledger = AtomicFile(File(activity.filesDir, "portal-operations.json"))
     private var operations = JSONArray()
     private var ledgerAvailable = true
     private var socket: WebSocket? = null
@@ -29,7 +36,7 @@ class PortalSocket(context: Context, private val backend: PortalBackend, private
     private val processing = mutableSetOf<String>()
     init {
         try {
-            if (ledger.baseFile.exists() || File(context.filesDir, "portal-operations.json.bak").exists()) operations = JSONArray(ledger.readFully().toString(Charsets.UTF_8))
+            if (ledger.baseFile.exists() || File(activity.filesDir, "portal-operations.json.bak").exists()) operations = JSONArray(ledger.readFully().toString(Charsets.UTF_8))
         } catch (_: Exception) { ledgerAvailable = false }
     }
     fun start() {
@@ -45,10 +52,13 @@ class PortalSocket(context: Context, private val backend: PortalBackend, private
         }
         if (!persist()) ledgerAvailable = false
         backend.onCredentialsChanged = { connectionGeneration++; socket?.cancel(); socket = null; connecting = false; connect() }
+        billing.portalPurchases = { purchases -> handlePurchases(purchases) }
         connect()
-        scope.launch { while (isActive) { delay(30_000); resend() } }
+        billing.refreshPurchases()
+        scope.launch { while (isActive) { delay(30_000); resend(); billing.refreshPurchases(); recoverPayments() } }
+        recoverPayments()
     }
-    fun stop() { stopped = true; connectionGeneration++; backend.onCredentialsChanged = null; socket?.close(1000, ""); socket = null; scope.cancel(); client.dispatcher.executorService.shutdown() }
+    fun stop() { stopped = true; connectionGeneration++; backend.onCredentialsChanged = null; billing.portalPurchases = null; socket?.close(1000, ""); socket = null; scope.cancel(); client.dispatcher.executorService.shutdown() }
     private fun persist(): Boolean {
         if (!ledgerAvailable) return false
         var stream: java.io.FileOutputStream? = null
@@ -108,9 +118,17 @@ class PortalSocket(context: Context, private val backend: PortalBackend, private
                 }
             }
             "subscription.restore" -> scope.launch {
-                billing.refreshPurchases()
-                try { send(id, action, "pending", data = backend.status(), error = "restore_pending_reconciliation") }
-                catch (_: Exception) { send(id, action, "pending", error = "restore_pending_reconciliation") }
+                try {
+                    val checked = withTimeoutOrNull(10_000) { suspendCancellableCoroutine<Boolean> { cont -> billing.refreshPurchases { ok -> if (cont.isActive) cont.resume(ok) } } } == true
+                    if (!checked) throw PortalFailure("play_unavailable")
+                    val status = backend.status()
+                    val record = (0 until operations.length()).mapNotNull { operations.optJSONObject(it) }.firstOrNull { op ->
+                        op.optString("userId") == currentUser && op.optString("status") == "purchased" && op.optString("providerMode") == "google_buy_v1" &&
+                            billing.activePurchases.any { purchase -> purchase.purchaseState == Purchase.PurchaseState.PURCHASED && purchase.products.contains(op.optString("productId")) && purchase.accountIdentifiers?.obfuscatedAccountId == op.optString("accountId") && purchase.accountIdentifiers?.obfuscatedProfileId == op.optString("profileId") }
+                    }
+                    if (activeProviderExpiry(status) != null && record != null) send(id, action, "purchased", data = JSONObject().put("planId", record.optString("productId")).put("transactionId", record.optString("transactionId")).put("verified", true))
+                    else send(id, action, "pending", data = status, error = "restore_pending_reconciliation")
+                } catch (_: Exception) { send(id, action, "pending", error = "restore_pending_reconciliation") }
             }
             else -> handleOperation(id, action, params)
         }
@@ -125,8 +143,9 @@ class PortalSocket(context: Context, private val backend: PortalBackend, private
         operations.put(op)
         if (!persist()) { ledgerAvailable = false; send(id, action, "failed", error = "storage_unavailable"); return }
         if (action == "pay" || action == "subscription.purchase") {
-            val failure = if (plan !in listOf("monthly", "yearly")) "invalid_plan" else if (backend.route?.purchaseAvailable != true) "purchase_disabled" else "android_verification_unavailable"
-            update(op, "failed", failure); return
+            val failure = if (plan !in listOf("monthly", "yearly")) "invalid_plan" else if (backend.route?.purchaseAvailable != true) "purchase_disabled" else if (!billing.configured || !billing.ready) "product_query_failed" else if (billing.isMember) "membership_already_active" else null
+            if (failure != null) update(op, "failed", failure) else beginPurchase(op)
+            return
         }
         processing.add(id)
         ads.show(if (action == "ad.rewarded") "rewarded" else "interstitial") { result ->
@@ -135,6 +154,106 @@ class PortalSocket(context: Context, private val backend: PortalBackend, private
             val status = if (result == "rewarded" || result == "dismissed") result else "failed"
             if (action == "ad.rewarded") op.put("completed", result == "rewarded")
             update(op, status, if (status == "failed") result else null)
+        }
+    }
+    private var activePayment: String? = null
+    private fun expiryMillis(value: Any?): Long? {
+        val text = when (value) { is Number -> value.toString(); is String -> value; else -> return null }
+        val number = text.toDoubleOrNull()
+        if (number != null && number.isFinite() && number > 0) return (if (number < 100_000_000_000.0) number * 1000 else number).toLong()
+        return try { Instant.parse(text).toEpochMilli() } catch (_: Exception) { null }
+    }
+    private fun providerExpiry(data: JSONObject): Long? {
+        val value = if (!data.isNull("rightExpireTime")) data.opt("rightExpireTime") else data.opt("vipExpireTime")
+        return expiryMillis(value)
+    }
+    private fun activeProviderExpiry(value: Any): Long? {
+        val data = value as? JSONObject ?: return null
+        val member = data.optInt("vipType", data.optInt("memberVipType", 0)) in 1..2
+        return providerExpiry(data)?.takeIf { member && it > System.currentTimeMillis() }
+    }
+    private fun beginPurchase(op: JSONObject) {
+        val id = op.getString("requestId")
+        if (activePayment != null) { update(op, "failed", "purchase_in_progress"); return }
+        activePayment = id; processing.add(id)
+        scope.launch {
+            try {
+                val product = if (op.optString("plan") == "monthly") MONTHLY else YEARLY
+                val original = backend.status()
+                val fields = original as? JSONObject ?: throw PortalFailure("invalid_response")
+                val member = fields.optInt("vipType", fields.optInt("memberVipType", 0)) in 1..2
+                val priorExpiry = providerExpiry(fields)
+                if (member && priorExpiry == null) throw PortalFailure("user_query_failed")
+                val initialExpiry = if (member && priorExpiry != null && priorExpiry > System.currentTimeMillis()) priorExpiry else 0L
+                val session = backend.session ?: throw PortalFailure("session_unavailable")
+                if (stopped || session.userId != currentUser) { activePayment = null; return@launch }
+                val account = MessageDigest.getInstance("SHA-256").digest((session.deviceCode + ":" + currentUser).toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
+                val profile = UUID.randomUUID().toString().replace("-", "")
+                op.put("productId", product).put("accountId", account).put("profileId", profile)
+                    .put("baselineExpiry", initialExpiry).put("providerMode", "google_buy_v1").put("stage", "preparing")
+                if (!persist()) { ledgerAvailable = false; activePayment = null; return@launch }
+                billing.launchPortal(activity, product, account, profile, { offer ->
+                    op.put("priceMicros", offer.micros).put("currency", offer.currency).put("stage", "launching")
+                    persist().also { if (!it) ledgerAvailable = false }
+                }) { code, launched ->
+                    activePayment = null
+                    if (stopped) return@launchPortal
+                    if (code == BillingClient.BillingResponseCode.USER_CANCELED) update(op, "cancelled", null)
+                    else if (!launched) update(op, "failed", "play_launch_failed")
+                    billing.refreshPurchases()
+                }
+            } catch (_: Exception) {
+                if (!stopped) update(op, "failed", "user_query_failed")
+                activePayment = null
+            } finally { processing.remove(id) }
+        }
+    }
+    private fun handlePurchases(purchases: List<Purchase>) {
+        if (stopped || !ledgerAvailable) return
+        purchases.forEach { purchase ->
+            val ids = purchase.accountIdentifiers ?: return@forEach
+            if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED || ids.obfuscatedAccountId.isNullOrBlank() || ids.obfuscatedProfileId.isNullOrBlank()) return@forEach
+            val record = (0 until operations.length()).mapNotNull { operations.optJSONObject(it) }.firstOrNull { op ->
+                op.optString("userId") == currentUser && op.optString("providerMode") == "google_buy_v1" && op.optString("action") in listOf("pay", "subscription.purchase") && op.optString("accountId") == ids.obfuscatedAccountId && op.optString("profileId") == ids.obfuscatedProfileId && purchase.products.contains(op.optString("productId"))
+            } ?: return@forEach
+            if (record.optString("status") == "purchased") return@forEach
+            val known = record.optString("purchaseToken")
+            if (known.isNotEmpty() && known != purchase.purchaseToken) return@forEach
+            record.put("status", "pending").put("purchaseToken", purchase.purchaseToken).put("transactionId", purchase.orderId ?: "")
+            if (!persist()) { ledgerAvailable = false; return@forEach }
+            verifyPayment(record)
+        }
+    }
+    private fun recoverPayments() {
+        if (stopped || !ledgerAvailable) return
+        for (i in 0 until operations.length()) {
+            val op = operations.optJSONObject(i) ?: continue
+            if (op.optString("userId") == currentUser && op.optString("providerMode") == "google_buy_v1" && op.optString("status") == "pending" && op.optString("purchaseToken").isNotEmpty()) verifyPayment(op)
+        }
+    }
+    private fun verifyPayment(op: JSONObject) {
+        val id = op.optString("requestId")
+        if (!processing.add(id)) return
+        scope.launch {
+            try {
+                if (!op.optBoolean("providerAccepted")) {
+                    // The Google endpoint's replay behavior is undocumented. Never repeat an uncertain submission.
+                    if (op.optBoolean("submitStarted")) return@launch
+                    op.put("submitStarted", true)
+                    if (!persist()) { ledgerAvailable = false; return@launch }
+                    val result = backend.confirmGooglePurchase(op.getString("productId"), op.getString("purchaseToken"), op.getLong("priceMicros"), op.getString("currency"))
+                    if (result !is String || result.isBlank() || result.trim().lowercase() in listOf("false", "failed", "error")) return@launch
+                    op.put("providerAccepted", true)
+                    if (!persist()) { ledgerAvailable = false; return@launch }
+                }
+                val expiry = activeProviderExpiry(backend.status()) ?: return@launch
+                if (expiry <= op.optLong("baselineExpiry", 0L)) return@launch
+                val acknowledged = withTimeoutOrNull(15_000) { suspendCancellableCoroutine<Boolean> { cont ->
+                    billing.acknowledgePortal(op.getString("purchaseToken"), op.getString("accountId"), op.getString("profileId")) { ok -> if (cont.isActive) cont.resume(ok) }
+                } } == true
+                if (acknowledged && !stopped) update(op, "purchased", null)
+            } catch (_: Exception) { /* Retain the original transaction; never guess a successful result. */ }
+            finally { processing.remove(id) }
         }
     }
     private fun update(op: JSONObject, status: String, error: String?) {
@@ -150,7 +269,8 @@ class PortalSocket(context: Context, private val backend: PortalBackend, private
         if (previous.isNotEmpty() && previous != status) op.put("ackAmbiguous", true) else if (previous.isEmpty()) op.put("ackCandidate", status)
         op.put("needsSend", true)
         if (!persist()) { ledgerAvailable = false; return }
-        send(op.getString("requestId"), op.getString("action"), status, op.optString("plan").takeIf { it.isNotEmpty() }, if (op.has("completed")) op.optBoolean("completed") else null, error = op.optString("error").takeIf { it.isNotEmpty() })
+        val purchaseData = if (op.optString("action") == "subscription.purchase" && status == "purchased") JSONObject().put("planId", op.optString("productId")).put("transactionId", op.optString("transactionId")).put("verified", true) else null
+        send(op.getString("requestId"), op.getString("action"), status, op.optString("plan").takeIf { it.isNotEmpty() }, if (op.has("completed")) op.optBoolean("completed") else null, data = purchaseData, error = op.optString("error").takeIf { it.isNotEmpty() })
     }
     private fun ack(data: JSONObject) {
         if (data.optString("platform") != "h5" || data.optString("status") != "received" || data.optInt("version") != 1) return

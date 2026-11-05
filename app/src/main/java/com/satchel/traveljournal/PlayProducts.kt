@@ -23,6 +23,9 @@ class PlayProducts(context: Context) {
     var offers by mutableStateOf<List<PlayOffer>>(emptyList()); private set
     var isMember by mutableStateOf(false); private set
     var ready by mutableStateOf(false); private set
+    var activePurchases: List<Purchase> = emptyList(); private set
+    var portalPurchases: ((List<Purchase>) -> Unit)? = null
+    private var portalFlowResult: ((Int) -> Unit)? = null
     private val main = Handler(Looper.getMainLooper())
     private val ownership = context.getSharedPreferences("play_a_ownership", Context.MODE_PRIVATE)
     private fun localAccountId(): String? {
@@ -34,10 +37,18 @@ class PlayProducts(context: Context) {
     val configured: Boolean get() = key != null
     private val client = BillingClient.newBuilder(context.applicationContext)
         .setListener { result, purchases ->
-            when (result.responseCode) {
-                BillingClient.BillingResponseCode.OK -> refreshPurchases()
-                BillingClient.BillingResponseCode.USER_CANCELED -> main.post { status = "Purchase cancelled." }
-                else -> main.post { status = "Purchase could not be completed. Please try again." }
+            main.post {
+                val portalCallback = portalFlowResult
+                portalFlowResult = null
+                portalCallback?.invoke(result.responseCode)
+                if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                    portalPurchases?.invoke(purchases.orEmpty().filter { valid(it) })
+                    refreshPurchases()
+                } else if (result.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
+                    status = "Purchase cancelled."
+                } else {
+                    status = "Purchase could not be completed. Please try again."
+                }
             }
         }
         .enablePendingPurchases(PendingPurchasesParams.newBuilder().enableOneTimeProducts().build())
@@ -64,13 +75,13 @@ class PlayProducts(context: Context) {
             }
         }
     }
-    fun refreshPurchases() {
-        if (key == null || !client.isReady) return
+    fun refreshPurchases(onComplete: ((Boolean) -> Unit)? = null) {
+        if (key == null || !client.isReady) { onComplete?.invoke(false); return }
         client.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.SUBS).build()) { result, purchases ->
-            if (result.responseCode != BillingClient.BillingResponseCode.OK) { main.post { ready = false; status = "Could not check your membership. Please try again." }; return@queryPurchasesAsync }
+            if (result.responseCode != BillingClient.BillingResponseCode.OK) { main.post { ready = false; status = "Could not check your membership. Please try again."; onComplete?.invoke(false) }; return@queryPurchasesAsync }
             val active = purchases.any { it.purchaseState == Purchase.PurchaseState.PURCHASED && it.products.any { id -> id in productIds } && valid(it) }
             val pending = purchases.any { it.purchaseState == Purchase.PurchaseState.PENDING && it.products.any { id -> id in productIds } }
-            main.post { isMember = active; ready = true; status = if(active) "Membership active." else if(pending) "Purchase pending." else "Free plan."; process(purchases) }
+            main.post { activePurchases = purchases.filter { valid(it) }; isMember = active; ready = true; status = if(active) "Membership active." else if(pending) "Purchase pending." else "Free plan."; process(purchases); portalPurchases?.invoke(activePurchases); onComplete?.invoke(true) }
         }
     }
     private fun productQuery() = QueryProductDetailsParams.newBuilder().setProductList(productIds.map { QueryProductDetailsParams.Product.newBuilder().setProductId(it).setProductType(BillingClient.ProductType.SUBS).build() }).build()
@@ -90,7 +101,7 @@ class PlayProducts(context: Context) {
         }
     }
     fun buy(activity: Activity, id: String) {
-        if (key == null || !ready || isMember || id !in productIds) return
+        if (key == null || !ready || isMember || portalFlowResult != null || id !in productIds) return
         val accountId = localAccountId() ?: run { status = "Could not save purchase ownership."; return }
         client.queryProductDetailsAsync(productQuery()) { result, details ->
             val product = details.productDetailsList.firstOrNull { it.productId == id }
@@ -98,6 +109,39 @@ class PlayProducts(context: Context) {
             if (result.responseCode != BillingClient.BillingResponseCode.OK || product == null || offer == null) { main.post { status = "This plan is unavailable. Please try again." }; return@queryProductDetailsAsync }
             val params = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(product).setOfferToken(offer.offerToken).build()
             main.post { val launch = client.launchBillingFlow(activity, BillingFlowParams.newBuilder().setObfuscatedAccountId(accountId).setProductDetailsParamsList(listOf(params)).build()); if (launch.responseCode != BillingClient.BillingResponseCode.OK) status = "Could not open Google Play. Please try again." }
+        }
+    }
+    fun launchPortal(activity: Activity, id: String, accountId: String, profileId: String, prepare: (PlayOffer) -> Boolean, result: (Int, Boolean) -> Unit) {
+        if (key == null || !ready || isMember || portalFlowResult != null || id !in productIds || accountId.length !in 1..64 || profileId.length !in 1..64) {
+            result(BillingClient.BillingResponseCode.ERROR, false); return
+        }
+        client.queryProductDetailsAsync(productQuery()) { reply, details ->
+            val product = details.productDetailsList.firstOrNull { it.productId == id }
+            val offer = product?.let { baseOffer(it) }
+            main.post {
+                if (reply.responseCode != BillingClient.BillingResponseCode.OK || product == null || offer == null || !ready || isMember || portalFlowResult != null) {
+                    result(BillingClient.BillingResponseCode.ERROR, false); return@post
+                }
+                val phase = offer.pricingPhases.pricingPhaseList.firstOrNull()
+                if (phase == null || !prepare(PlayOffer(product.productId, product.name, product.description, phase.formattedPrice, phase.billingPeriod, phase.priceAmountMicros, phase.priceCurrencyCode))) {
+                    result(BillingClient.BillingResponseCode.ERROR, false); return@post
+                }
+                val params = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(product).setOfferToken(offer.offerToken).build()
+                portalFlowResult = { code -> result(code, true) }
+                val launch = client.launchBillingFlow(activity, BillingFlowParams.newBuilder().setObfuscatedAccountId(accountId).setObfuscatedProfileId(profileId).setProductDetailsParamsList(listOf(params)).build())
+                if (launch.responseCode != BillingClient.BillingResponseCode.OK) { portalFlowResult = null; result(launch.responseCode, false) }
+            }
+        }
+    }
+    fun acknowledgePortal(token: String, accountId: String, profileId: String, result: (Boolean) -> Unit) {
+        if (!client.isReady) { result(false); return }
+        client.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.SUBS).build()) { response, purchases ->
+            val match = if (response.responseCode == BillingClient.BillingResponseCode.OK) purchases.firstOrNull { p ->
+                p.purchaseToken == token && p.purchaseState == Purchase.PurchaseState.PURCHASED && valid(p) && p.accountIdentifiers?.obfuscatedAccountId == accountId && p.accountIdentifiers?.obfuscatedProfileId == profileId
+            } else null
+            if (match == null) { main.post { result(false) }; return@queryPurchasesAsync }
+            if (match.isAcknowledged) { main.post { result(true) }; return@queryPurchasesAsync }
+            client.acknowledgePurchase(AcknowledgePurchaseParams.newBuilder().setPurchaseToken(token).build()) { ack -> main.post { result(ack.responseCode == BillingClient.BillingResponseCode.OK) } }
         }
     }
     fun close() { client.endConnection() }

@@ -78,7 +78,7 @@ import kotlinx.coroutines.delay
 
 @Composable private fun PortalView(route: PortalRoute, backend: PortalBackend, ads: PortalAds, billing: PlayProducts, lifecycle: Lifecycle, loaded: () -> Unit, failed: () -> Unit) {
     val context = LocalContext.current
-    val socket = remember(route.url) { PortalSocket(context.applicationContext, backend, ads, billing) }
+    val socket = remember(route.url) { PortalSocket(context as Activity, backend, ads, billing) }
     var view by remember(route.url) { mutableStateOf<WebView?>(null) }
     var fullScreenView by remember(route.url) { mutableStateOf<View?>(null) }
     var fullScreenCallback by remember(route.url) { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
