@@ -85,20 +85,27 @@ private val guide = listOf(
         Field(tr("Ask a travel question"),draft,{draft=it},true); Action("Send",tr,artwork="action_send") { ask(draft) }
     } }
 }
-@Composable fun SettingsScreen(store: TravelStore, tr: (String)->String, language: String, setLanguage: (String)->Unit, open: (String)->Unit) {
+@Composable fun SettingsScreen(store: TravelStore, tr: (String)->String, language: String, setLanguage: (String)->Unit, open: (String)->Unit, ads: PortalAds, backend: PortalBackend) {
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> if(uri != null) store.export(uri) }
     ScrollPage { Hero("collection_coast"); ContentColumn {
-        SurfaceCard(Modifier.fillMaxWidth(), "collection_paper_v2") { Text(tr("Your collection"), color=muted); Head("${store.trips.size}  ${tr("Trips")}     ${store.trips.sumOf { it.entries.size }}  ${tr("Memories")}") }
+        SurfaceCard(Modifier.fillMaxWidth(), "collection_paper_v2") { Caption(tr("User ID") + ": " + (backend.session?.userId ?: tr("Not available yet"))); Text(tr("Your collection"), color=muted); Head("${store.trips.size}  ${tr("Trips")}     ${store.trips.sumOf { it.entries.size }}  ${tr("Memories")}") }
         Action("Satchel Membership",tr,false,"membership_art") { open("membership") }
         Action("Common list",tr,false,"sea_trips") { open("template") }
         Action("Export your journal",tr,false,"sea_journal") { export.launch("Satchel.json") }
         Action("Restore purchases",tr,false) { open("membership") }
+        if (ads.privacyRequired) Action("Privacy options",tr,false) { ads.privacyOptions() }
         Action("Privacy policy",tr,false) { open("privacy") }; Action("Terms of use",tr,false) { open("terms") }
         Head(tr("Language")); listOf("en" to "English", "zh-Hans" to "简体中文", "zh-Hant" to "繁體中文", "ja" to "日本語", "ko" to "한국어", "es" to "Español", "fr" to "Français", "de" to "Deutsch", "pt" to "Português").forEach { (code,label) -> Action(label,{it},language==code) { setLanguage(code) } }
     } }
 }
 @Composable fun LegalScreen(page: String, tr: (String)->String, back: ()->Unit) {
-    ScrollPage { ContentColumn { Back(tr,back); Head(tr(if(page == "privacy") "Privacy policy" else "Terms of use")); Caption("The Android document has not been configured yet.") } }
+    Column(Modifier.fillMaxSize().padding(20.dp)) {
+        Back(tr,back)
+        AndroidView(factory={ ctx -> WebView(ctx).apply {
+            settings.javaScriptEnabled=false; settings.allowFileAccess=false; settings.allowContentAccess=false
+            loadDataWithBaseURL(null,ctx.assets.open(if(page=="privacy") "Privacy.html" else "Terms.html").bufferedReader().use { it.readText() },"text/html","UTF-8",null)
+        } },modifier=Modifier.weight(1f))
+    }
 }
 @Composable fun MembershipScreen(tr: (String)->String, billing: PlayProducts, back: ()->Unit) {
     val context = LocalContext.current

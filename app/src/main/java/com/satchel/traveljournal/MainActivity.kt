@@ -36,17 +36,9 @@ import java.time.LocalDate
 val ink = Color(0xFF1F3345); val muted = Color(0xFF596B75); val ocean = Color(0xFF0847A3); val cream = Color(0xFFFFFCF5); val paper = Color(0xFFF7F9F5)
 class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { SatchelApp() } } }
 
-@Composable fun SatchelApp() {
+@Composable fun LocalApp(billing: PlayProducts, ads: PortalAds, backend: PortalBackend) {
     val context = LocalContext.current
-    val billing = remember { PlayProducts(context) }
     val store = remember { TravelStore(context, billing) }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(billing, lifecycle) {
-        billing.connect()
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) billing.refreshPurchases() }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); billing.close() }
-    }
     val prefs = remember { context.getSharedPreferences("satchel", 0) }
     var language by remember { mutableStateOf(prefs.getString("language", "en") ?: "en") }
     val translations = remember { JSONObject(context.assets.open("translations.json").bufferedReader().use { it.readText() }) }
@@ -71,7 +63,7 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
                         0 -> TripsScreen(store, tr, { page = "new" }, { selectedId = it; detailSection = 0; page = "trip" }, { tab = it })
                         1 -> JournalScreen(store, tr, { page = "new" }, { selectedId = it; detailSection = 1; page = "trip" }, { selectedId = it; entryId = ""; page = "entry" })
                         2 -> GuideScreen(tr, prefs, billing)
-                        else -> SettingsScreen(store, tr, language, { language = it; prefs.edit().putString("language", it).apply() }, { page = it })
+                        else -> SettingsScreen(store, tr, language, { language = it; prefs.edit().putString("language", it).apply() }, { page = it }, ads, backend)
                     }
                     "new" -> TripEditor(store, tr, null, { page = "home" })
                     "trip" -> if (trip != null) TripScreen(store, tr, trip, detailSection, { detailSection = it }, { page = "home" }, { page = "tripEdit" }, { itemId = it; page = "item" }, { entryId = it; page = "entry" }, { page = it }) else { page = "home" }

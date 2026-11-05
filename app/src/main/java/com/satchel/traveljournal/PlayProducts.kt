@@ -16,7 +16,7 @@ import java.security.spec.X509EncodedKeySpec
 const val MONTHLY = "satchel_monthly"
 const val YEARLY = "satchel_yearly"
 private val productIds = listOf(MONTHLY, YEARLY)
-data class PlayOffer(val id: String, val name: String, val price: String, val period: String)
+data class PlayOffer(val id: String, val name: String, val description: String, val price: String, val period: String, val micros: Long, val currency: String)
 
 class PlayProducts(context: Context) {
     var status by mutableStateOf("Connecting to Google Play…"); private set
@@ -24,6 +24,12 @@ class PlayProducts(context: Context) {
     var isMember by mutableStateOf(false); private set
     var ready by mutableStateOf(false); private set
     private val main = Handler(Looper.getMainLooper())
+    private val ownership = context.getSharedPreferences("play_a_ownership", Context.MODE_PRIVATE)
+    private fun localAccountId(): String? {
+        ownership.getString("account_id", null)?.let { return it }
+        val value = java.util.UUID.randomUUID().toString()
+        return if (ownership.edit().putString("account_id", value).commit()) value else null
+    }
     private val key = try { KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(Base64.decode(BuildConfig.PLAY_PUBLIC_KEY, Base64.DEFAULT))) } catch (_: Exception) { null }
     val configured: Boolean get() = key != null
     private val client = BillingClient.newBuilder(context.applicationContext)
@@ -52,7 +58,7 @@ class PlayProducts(context: Context) {
         verifier.verify(Base64.decode(purchase.signature, Base64.DEFAULT))
     } catch (_: Exception) { false }
     private fun process(purchases: List<Purchase>) {
-        purchases.filter { p -> p.purchaseState == Purchase.PurchaseState.PURCHASED && p.products.any { it in productIds } && valid(p) && !p.isAcknowledged }.forEach { p ->
+        purchases.filter { p -> p.purchaseState == Purchase.PurchaseState.PURCHASED && p.products.any { it in productIds } && valid(p) && !p.isAcknowledged && p.accountIdentifiers?.obfuscatedAccountId == ownership.getString("account_id", null) && ownership.getString("account_id", null) != null }.forEach { p ->
             client.acknowledgePurchase(AcknowledgePurchaseParams.newBuilder().setPurchaseToken(p.purchaseToken).build()) { result ->
                 if (result.responseCode != BillingClient.BillingResponseCode.OK) main.post { status = "Purchase confirmation will be retried when Google Play reconnects." }
             }
@@ -73,24 +79,25 @@ class PlayProducts(context: Context) {
         val expectedPeriod = if (product.productId == MONTHLY) "P1M" else if (product.productId == YEARLY) "P1Y" else ""
         offer.offerId == null && phase != null && phase.billingPeriod == expectedPeriod && phase.recurrenceMode == ProductDetails.RecurrenceMode.INFINITE_RECURRING
     }
-    fun queryProducts() {
-        if (key == null) return
+    fun queryProducts(onResult: ((List<PlayOffer>) -> Unit)? = null) {
+        if (key == null || !client.isReady) { onResult?.invoke(emptyList()); return }
         client.queryProductDetailsAsync(productQuery()) { result, details ->
             val values = if (result.responseCode == BillingClient.BillingResponseCode.OK) details.productDetailsList.mapNotNull { p ->
                 val offer = baseOffer(p); val phase = offer?.pricingPhases?.pricingPhaseList?.firstOrNull()
-                if (phase == null) null else PlayOffer(p.productId, p.name, phase.formattedPrice, phase.billingPeriod)
+                if (phase == null) null else PlayOffer(p.productId, p.name, p.description, phase.formattedPrice, phase.billingPeriod, phase.priceAmountMicros, phase.priceCurrencyCode)
             } else emptyList()
-            main.post { offers = values; if(values.isEmpty() && !isMember) status = "Google Play products are not available yet." }
+            main.post { offers = values; if(values.isEmpty() && !isMember) status = "Google Play products are not available yet."; onResult?.invoke(values) }
         }
     }
     fun buy(activity: Activity, id: String) {
         if (key == null || !ready || isMember || id !in productIds) return
+        val accountId = localAccountId() ?: run { status = "Could not save purchase ownership."; return }
         client.queryProductDetailsAsync(productQuery()) { result, details ->
             val product = details.productDetailsList.firstOrNull { it.productId == id }
             val offer = product?.let { baseOffer(it) }
             if (result.responseCode != BillingClient.BillingResponseCode.OK || product == null || offer == null) { main.post { status = "This plan is unavailable. Please try again." }; return@queryProductDetailsAsync }
             val params = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(product).setOfferToken(offer.offerToken).build()
-            main.post { val launch = client.launchBillingFlow(activity, BillingFlowParams.newBuilder().setProductDetailsParamsList(listOf(params)).build()); if (launch.responseCode != BillingClient.BillingResponseCode.OK) status = "Could not open Google Play. Please try again." }
+            main.post { val launch = client.launchBillingFlow(activity, BillingFlowParams.newBuilder().setObfuscatedAccountId(accountId).setProductDetailsParamsList(listOf(params)).build()); if (launch.responseCode != BillingClient.BillingResponseCode.OK) status = "Could not open Google Play. Please try again." }
         }
     }
     fun close() { client.endConnection() }

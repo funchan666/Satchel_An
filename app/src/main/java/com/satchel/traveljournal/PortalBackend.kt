@@ -42,7 +42,7 @@ class PortalBackend(private val context: Context) {
                 shortClient.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
                     val body = response.body ?: return@use
                     if (!response.isSuccessful || body.contentLength() > 128) return@use
-                    val text = body.string().trim()
+                    val text = body.byteStream().use { it.readNBytesCompat(129) }.takeIf { it.size <= 128 }?.toString(Charsets.UTF_8)?.trim() ?: return@use
                     if (text.length <= 15 && text.matches(Regex("[0-9.]+")) && InetAddress.getByName(text) is Inet4Address) return@withContext text
                 }
             } catch (_: Exception) { }
@@ -60,7 +60,7 @@ class PortalBackend(private val context: Context) {
     suspend fun open(language: String): PortalRoute {
         val current = credentials(); session = current
         val params = mapOf("platform" to "android", "name" to "Satchel", "version" to BuildConfig.VERSION_NAME, "lang" to language, "userId" to current.userId, "time" to TimeZone.getDefault().id, "input" to "手机键盘")
-        val result = nested(request("/app-api/flow/release-package/getV2", params = params))
+        val result = nested(raw("/app-api/flow/release-package/getV2", params = params))
         val switch = result.opt("NB01")
         val allowed = when (switch) { null, JSONObject.NULL -> true; is Boolean -> !switch; else -> false }
         val address = result.optString("NB02")
@@ -106,7 +106,8 @@ class PortalBackend(private val context: Context) {
             json.opt("data") ?: JSONObject.NULL
         }
     }
-    fun close() { route = null; session = null; onCredentialsChanged = null }
+    fun closePortal() { route = null }
+    fun close() { closePortal(); session = null; onCredentialsChanged = null }
     private fun nested(value: Any): JSONObject {
         val obj = value as? JSONObject ?: throw PortalFailure("invalid_response")
         return obj.optJSONObject("data") ?: obj.optJSONObject("result") ?: obj
