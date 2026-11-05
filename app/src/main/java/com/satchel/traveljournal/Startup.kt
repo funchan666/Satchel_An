@@ -22,6 +22,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 
 @Composable fun SatchelApp() {
     val context = LocalContext.current
@@ -36,6 +37,9 @@ import kotlinx.coroutines.delay
     var webReady by remember { mutableStateOf(false) }
     var starting by remember { mutableStateOf(true) }
     val language = remember { context.getSharedPreferences("satchel", 0).getString("language", "en") ?: "en" }
+    val translations = remember { JSONObject(context.assets.open("translations.json").bufferedReader().use { it.readText() }) }
+    val languageIndex = listOf("en", "zh-Hans", "zh-Hant", "ja", "ko", "es", "fr", "de", "pt").indexOf(language).coerceAtLeast(0)
+    val tr: (String) -> String = { key -> translations.optJSONArray(key)?.optString(languageIndex, key) ?: key }
     DisposableEffect(billing, lifecycle) {
         billing.connect()
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) billing.refreshPurchases() }
@@ -63,8 +67,8 @@ import kotlinx.coroutines.delay
     }
     Box(Modifier.fillMaxSize()) {
         route?.let { selected ->
-            PortalView(selected, backend, ads, billing, lifecycle, { webReady = true }, { backend.closePortal(); route = null; webReady = false })
-            if (!starting && ads.privacyRequired) Box(Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(8.dp)) { Action("Privacy options", { it }, false) { ads.privacyOptions() } }
+            PortalView(selected, backend, ads, billing, lifecycle, language, { webReady = true }, { backend.closePortal(); route = null; webReady = false })
+            if (!starting && ads.privacyRequired) Box(Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(8.dp)) { Action("Privacy options", tr, false) { ads.privacyOptions() } }
         }
         if (!starting && route == null) LocalApp(billing, ads, backend)
         if (starting) Box(Modifier.fillMaxSize().background(Color(0xFFFDF8E7)), contentAlignment = Alignment.Center) {
@@ -76,9 +80,11 @@ import kotlinx.coroutines.delay
     }
 }
 
-@Composable private fun PortalView(route: PortalRoute, backend: PortalBackend, ads: PortalAds, billing: PlayProducts, lifecycle: Lifecycle, loaded: () -> Unit, failed: () -> Unit) {
+@Composable private fun PortalView(route: PortalRoute, backend: PortalBackend, ads: PortalAds, billing: PlayProducts, lifecycle: Lifecycle, language: String, loaded: () -> Unit, failed: () -> Unit) {
     val context = LocalContext.current
     val socket = remember(route.url) { PortalSocket(context as Activity, backend, ads, billing) }
+    val translations = remember { JSONObject(context.assets.open("translations.json").bufferedReader().use { it.readText() }) }
+    val languageIndex = listOf("en", "zh-Hans", "zh-Hant", "ja", "ko", "es", "fr", "de", "pt").indexOf(language).coerceAtLeast(0)
     var view by remember(route.url) { mutableStateOf<WebView?>(null) }
     var fullScreenView by remember(route.url) { mutableStateOf<View?>(null) }
     var fullScreenCallback by remember(route.url) { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
@@ -134,5 +140,13 @@ import kotlinx.coroutines.delay
     fullScreenView?.let { content -> AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
         FrameLayout(ctx).apply { setBackgroundColor(android.graphics.Color.BLACK); (content.parent as? ViewGroup)?.removeView(content); addView(content, FrameLayout.LayoutParams(-1, -1)) }
     }, onRelease = { frame -> frame.removeAllViews() }) }
+    socket.purchaseActivity?.let { message ->
+        SurfaceCard(Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp).widthIn(max = 360.dp), "button_paper") {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Artwork("portal_payment_mark", Modifier.size(48.dp))
+                Text(translations.optJSONArray(message)?.optString(languageIndex, message) ?: message, color = ink)
+            }
+        }
+    }
     }
 }

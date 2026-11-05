@@ -49,7 +49,7 @@ import java.util.UUID
 }
 
 @Composable fun TripScreen(store: TravelStore, tr: (String)->String, trip: Trip, section: Int, selectSection: (Int)->Unit, back: ()->Unit, editTrip: ()->Unit, editItem: (String)->Unit, editEntry: (String)->Unit, navigate: (String)->Unit) {
-    var returning by remember { mutableStateOf(false) }; var onlyRemaining by remember { mutableStateOf(false) }; var saved by remember { mutableStateOf(false) }
+    var returning by rememberSaveable { mutableStateOf(false) }; var onlyRemaining by rememberSaveable { mutableStateOf(false) }; var saved by rememberSaveable { mutableStateOf(false) }
     ScrollPage { ContentColumn {
         Back(tr,back); Photo(store,trip.cover,Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(18.dp)))
         Row(verticalAlignment=Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Head(trip.destination); Caption("${trip.start} — ${trip.end}") }; Box(Modifier.size(52.dp).clickable { store.update(trip.copy(favorite=!trip.favorite)) }) { Artwork(if(trip.favorite) "favorite_on" else "favorite_off",Modifier.fillMaxSize()) } }
@@ -71,7 +71,7 @@ import java.util.UUID
                 }
             }
             Action("Save as common list",tr,false) { if(store.saveTemplate(trip.items.map { it.copy(id=UUID.randomUUID().toString(),packed=false,returned=false,photo=null) })) saved=true }
-            if(saved) Caption(tr("Saved"))
+            if(saved) Caption(tr("Common list saved"))
             Action("Packing photos",tr,false,"action_photo") { navigate("packingPhotos") }
             SurfaceCard(Modifier.fillMaxWidth().clickable { navigate("lessons") }) { Head(tr("Notes for next time")); if(trip.lessons.isNotBlank()) Caption(trip.lessons) }
         } else {
@@ -83,8 +83,8 @@ import java.util.UUID
 }
 private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTimeFormatter.ISO_LOCAL_DATE) } catch (_: Exception) { null }
 @Composable fun TripEditor(store: TravelStore, tr: (String)->String, old: Trip?, done: ()->Unit) {
-    var destination by remember(old?.id) { mutableStateOf(old?.destination ?: "") }; var start by remember(old?.id) { mutableStateOf(old?.start ?: LocalDate.now().toString()) }; var end by remember(old?.id) { mutableStateOf(old?.end ?: LocalDate.now().toString()) }
-    var kind by remember { mutableStateOf(old?.kind ?: "leisure") }; var source by remember { mutableStateOf("suggested") }; var cover by remember { mutableStateOf(old?.cover) }; var invalid by remember { mutableStateOf(false) }; var confirm by remember { mutableStateOf(false) }
+    var destination by rememberSaveable(old?.id) { mutableStateOf(old?.destination ?: "") }; var start by rememberSaveable(old?.id) { mutableStateOf(old?.start ?: LocalDate.now().toString()) }; var end by rememberSaveable(old?.id) { mutableStateOf(old?.end ?: LocalDate.now().toString()) }
+    var kind by rememberSaveable { mutableStateOf(old?.kind ?: "leisure") }; var source by rememberSaveable { mutableStateOf("suggested") }; var cover by rememberSaveable { mutableStateOf(old?.cover) }; var invalid by rememberSaveable { mutableStateOf(false) }; var confirm by rememberSaveable { mutableStateOf(false) }
     fun cancel() { if(cover!=old?.cover) store.discardPhoto(cover); done() }
     BackHandler { cancel() }
     ScrollPage { ContentColumn {
@@ -104,11 +104,11 @@ private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTi
             }
         }
         Action("Cancel",tr,false) { cancel() }
-        if(old!=null) { if(confirm) { Caption(tr("Delete this trip?")); Action("Delete",tr,false,"action_delete") { if(store.delete(old)) done() }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
+        if(old!=null) { if(confirm) { Caption(tr("Delete this trip and its records?")); Action("Delete",tr,false,"action_delete") { if(store.delete(old)) done() }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
     } }
 }
 @Composable fun ItemEditor(store: TravelStore, tr: (String)->String, trip: Trip, old: Item?, done: ()->Unit) {
-    var name by remember { mutableStateOf(old?.displayName(tr) ?: "") }; var category by remember { mutableStateOf(old?.displayCategory(tr) ?: "") }; var quantity by remember { mutableIntStateOf(old?.quantity ?: 1) }; var location by remember { mutableStateOf(old?.location ?: "") }; var notes by remember { mutableStateOf(old?.notes ?: "") }; var needsReturn by remember { mutableStateOf(old?.needsReturn ?: true) }; var photo by remember { mutableStateOf(old?.photo) }; var invalid by remember { mutableStateOf(false) }; var confirm by remember { mutableStateOf(false) }
+    var name by rememberSaveable { mutableStateOf(old?.displayName(tr) ?: "") }; var category by rememberSaveable { mutableStateOf(old?.displayCategory(tr) ?: "") }; var quantity by rememberSaveable { mutableIntStateOf(old?.quantity ?: 1) }; var location by rememberSaveable { mutableStateOf(old?.location ?: "") }; var notes by rememberSaveable { mutableStateOf(old?.notes ?: "") }; var needsReturn by rememberSaveable { mutableStateOf(old?.needsReturn ?: true) }; var photo by rememberSaveable { mutableStateOf(old?.photo) }; var invalid by rememberSaveable { mutableStateOf(false) }; var confirm by rememberSaveable { mutableStateOf(false) }
     fun cancel() { if(photo!=old?.photo) store.discardPhoto(photo); done() }
     BackHandler { cancel() }
     ScrollPage { ContentColumn {
@@ -124,7 +124,7 @@ private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTi
     } }
 }
 @Composable fun EntryEditor(store: TravelStore, tr: (String)->String, trip: Trip, old: Entry?, done: ()->Unit) {
-    val format=DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm").withResolverStyle(java.time.format.ResolverStyle.STRICT); var dateText by remember { mutableStateOf(old?.date ?: LocalDateTime.now().format(format)) }; var text by remember { mutableStateOf(old?.text ?: "") }; var photos by remember { mutableStateOf(old?.photos ?: emptyList()) }; var invalid by remember { mutableStateOf(false) }; var confirm by remember { mutableStateOf(false) }
+    val format=DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm").withResolverStyle(java.time.format.ResolverStyle.STRICT); var dateText by rememberSaveable { mutableStateOf(old?.date ?: LocalDateTime.now().format(format)) }; var text by rememberSaveable { mutableStateOf(old?.text ?: "") }; var photos by rememberSaveable { mutableStateOf(old?.photos ?: emptyList()) }; var invalid by rememberSaveable { mutableStateOf(false) }; var confirm by rememberSaveable { mutableStateOf(false) }
     fun cancel() { (photos-(old?.photos ?: emptyList()).toSet()).forEach { store.discardPhoto(it) }; done() }
     BackHandler { cancel() }
     ScrollPage { ContentColumn {
@@ -136,13 +136,13 @@ private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTi
         if(old!=null) { if(confirm) { Action("Delete",tr,false,"action_delete") { if(store.update(trip.copy(entries=trip.entries.filterNot { it.id==old.id }))) { cancel() } }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
     } }
 }
-@Composable fun LessonsEditor(store: TravelStore, tr: (String)->String, trip: Trip, done: ()->Unit) { var text by remember { mutableStateOf(trip.lessons) }; ScrollPage { ContentColumn { Back(tr,done); Hero("journal_coast",150); Field(tr("Notes for next time"),text,{text=it},true); Action("Save",tr,artwork="action_save") { if(store.update(trip.copy(lessons=text))) done() }; Action("Cancel",tr,false, onClick=done) } } }
+@Composable fun LessonsEditor(store: TravelStore, tr: (String)->String, trip: Trip, done: ()->Unit) { var text by rememberSaveable { mutableStateOf(trip.lessons) }; ScrollPage { ContentColumn { Back(tr,done); Hero("journal_coast",150); Field(tr("Notes for next time"),text,{text=it},true); Action("Save",tr,artwork="action_save") { if(store.update(trip.copy(lessons=text))) done() }; Action("Cancel",tr,false, onClick=done) } } }
 @Composable fun PackingPhotosScreen(store: TravelStore, tr: (String)->String, trip: Trip, done: ()->Unit) {
-    var editing by remember { mutableStateOf<String?>(null) }; var note by remember { mutableStateOf("") }; var confirm by remember { mutableStateOf(false) }
+    var editing by rememberSaveable { mutableStateOf<String?>(null) }; var note by rememberSaveable { mutableStateOf("") }; var confirm by rememberSaveable { mutableStateOf(false) }
     BackHandler(editing != null) { editing = null }
     ScrollPage { ContentColumn { Back(tr) { if(editing!=null) editing=null else done() }; Head(tr("Packing photos")); if(editing==null) { PhotoActions(store,tr) { name -> if(!store.update(trip.copy(packingPhotos=trip.packingPhotos+name))) store.discardPhoto(name) }; trip.packingPhotos.forEach { p -> Column(Modifier.clickable { editing=p; note=trip.packingPhotoNotes[p].orEmpty(); confirm=false }) { Photo(store,p,Modifier.fillMaxWidth().height(200.dp)); Caption(trip.packingPhotoNotes[p].orEmpty()) } } } else { val p=editing!!; Photo(store,p,Modifier.fillMaxWidth().height(240.dp)); Field(tr("Notes"),note,{note=it},true); Action("Save",tr) { if(store.update(trip.copy(packingPhotoNotes=trip.packingPhotoNotes+(p to note)))) editing=null }; if(confirm) Action("Delete",tr,false,"action_delete") { if(store.update(trip.copy(packingPhotos=trip.packingPhotos-p,packingPhotoNotes=trip.packingPhotoNotes-p))) editing=null } else Action("Delete",tr,false,"action_delete") { confirm=true } } } }
 }
 @Composable fun TemplateScreen(store: TravelStore, tr: (String)->String, done: ()->Unit) {
-    var items by remember { mutableStateOf(store.template.map { it.copy(name = it.displayName(tr), category = it.displayCategory(tr)) }) }; var name by remember { mutableStateOf("") }; var category by remember { mutableStateOf("") }
+    var items by rememberSaveable { mutableStateOf(store.template.map { it.copy(name = it.displayName(tr), category = it.displayCategory(tr)) }) }; var name by rememberSaveable { mutableStateOf("") }; var category by rememberSaveable { mutableStateOf("") }
     ScrollPage { ContentColumn { Back(tr,done); Hero("packing_editorial", 170); Head(tr("Common list")); items.forEach { item -> SurfaceCard(Modifier.fillMaxWidth()) { Field(tr("Item name"),item.name,{ value -> items=items.map { if(it.id==item.id) it.copy(name=value,suggestedNameKey=null) else it } }); Field(tr("Category"),item.category,{ value -> items=items.map { if(it.id==item.id) it.copy(category=value,suggestedCategoryKey=null) else it } }); Action("Delete",tr,false,"action_delete") { items=items.filterNot { it.id==item.id } } } }; Field(tr("Item name"),name,{name=it}); Field(tr("Category"),category,{category=it}); Action("Add item",tr,false,"action_add") { if(name.isNotBlank() && category.isNotBlank()) { items=items+Item(name=name.trim(),category=category.trim()); name=""; category="" } }; Action("Save",tr,artwork="action_save") { if(store.saveTemplate(items.filter { it.name.isNotBlank() && it.category.isNotBlank() })) done() } } }
 }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -48,14 +49,14 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
     val translations = remember { JSONObject(context.assets.open("translations.json").bufferedReader().use { it.readText() }) }
     val languages = listOf("en", "zh-Hans", "zh-Hant", "ja", "ko", "es", "fr", "de", "pt")
     val tr: (String) -> String = { key -> translations.optJSONArray(key)?.optString(languages.indexOf(language).coerceAtLeast(0), key) ?: key }
-    var tab by remember { mutableIntStateOf(0) }
-    var page by remember { mutableStateOf("home") }
-    var selectedId by remember { mutableStateOf("") }
-    var itemId by remember { mutableStateOf("") }
-    var entryId by remember { mutableStateOf("") }
-    var entryReturnPage by remember { mutableStateOf("trip") }
-    var legalReturnPage by remember { mutableStateOf("home") }
-    var detailSection by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var page by rememberSaveable { mutableStateOf("home") }
+    var selectedId by rememberSaveable { mutableStateOf("") }
+    var itemId by rememberSaveable { mutableStateOf("") }
+    var entryId by rememberSaveable { mutableStateOf("") }
+    var entryReturnPage by rememberSaveable { mutableStateOf("trip") }
+    var legalReturnPage by rememberSaveable { mutableStateOf("home") }
+    var detailSection by rememberSaveable { mutableIntStateOf(0) }
     val tabStates = rememberSaveableStateHolder()
     val trip = store.trips.firstOrNull { it.id == selectedId }
     fun goBack() { page = when (page) { "trip", "new", "settings", "guide" -> "home"; "item", "tripEdit", "lessons", "packingPhotos" -> "trip"; "entry" -> entryReturnPage; "privacy", "terms" -> legalReturnPage; "template", "membership" -> "home"; else -> "home" } }

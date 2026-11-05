@@ -7,6 +7,9 @@ import com.android.billingclient.api.Purchase
 import android.os.Handler
 import android.os.Looper
 import android.util.AtomicFile
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.*
 import okhttp3.*
 import org.json.JSONArray
@@ -157,6 +160,7 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
         }
     }
     private var activePayment: String? = null
+    var purchaseActivity by mutableStateOf<String?>(null); private set
     private fun expiryMillis(value: Any?): Long? {
         val text = when (value) { is Number -> value.toString(); is String -> value; else -> return null }
         val number = text.toDoubleOrNull()
@@ -175,7 +179,7 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
     private fun beginPurchase(op: JSONObject) {
         val id = op.getString("requestId")
         if (activePayment != null) { update(op, "failed", "purchase_in_progress"); return }
-        activePayment = id; processing.add(id)
+        activePayment = id; purchaseActivity = "Preparing your purchase…"; processing.add(id)
         scope.launch {
             try {
                 val product = if (op.optString("plan") == "monthly") MONTHLY else YEARLY
@@ -186,17 +190,17 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
                 if (member && priorExpiry == null) throw PortalFailure("user_query_failed")
                 val initialExpiry = if (member && priorExpiry != null && priorExpiry > System.currentTimeMillis()) priorExpiry else 0L
                 val session = backend.session ?: throw PortalFailure("session_unavailable")
-                if (stopped || session.userId != currentUser) { activePayment = null; return@launch }
+                if (stopped || session.userId != currentUser) { activePayment = null; purchaseActivity = null; return@launch }
                 val account = MessageDigest.getInstance("SHA-256").digest((session.deviceCode + ":" + currentUser).toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
                 val profile = UUID.randomUUID().toString().replace("-", "")
                 op.put("productId", product).put("accountId", account).put("profileId", profile)
                     .put("baselineExpiry", initialExpiry).put("providerMode", "google_buy_v1").put("stage", "preparing")
-                if (!persist()) { ledgerAvailable = false; activePayment = null; return@launch }
+                if (!persist()) { ledgerAvailable = false; activePayment = null; purchaseActivity = null; return@launch }
                 billing.launchPortal(activity, product, account, profile, { offer ->
                     op.put("priceMicros", offer.micros).put("currency", offer.currency).put("stage", "launching")
-                    persist().also { if (!it) ledgerAvailable = false }
+                    persist().also { if (!it) ledgerAvailable = false else purchaseActivity = "Waiting for Google Play…" }
                 }) { code, launched ->
-                    activePayment = null
+                    activePayment = null; purchaseActivity = null
                     if (stopped) return@launchPortal
                     if (code == BillingClient.BillingResponseCode.USER_CANCELED) update(op, "cancelled", null)
                     else if (!launched) update(op, "failed", "play_launch_failed")
@@ -204,7 +208,7 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
                 }
             } catch (_: Exception) {
                 if (!stopped) update(op, "failed", "user_query_failed")
-                activePayment = null
+                activePayment = null; purchaseActivity = null
             } finally { processing.remove(id) }
         }
     }
@@ -235,6 +239,7 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
         val id = op.optString("requestId")
         if (!processing.add(id)) return
         scope.launch {
+            if (activePayment == null) purchaseActivity = "Confirming your purchase…"
             try {
                 if (!op.optBoolean("providerAccepted")) {
                     // The Google endpoint's replay behavior is undocumented. Never repeat an uncertain submission.
@@ -253,7 +258,7 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
                 } } == true
                 if (acknowledged && !stopped) update(op, "purchased", null)
             } catch (_: Exception) { /* Retain the original transaction; never guess a successful result. */ }
-            finally { processing.remove(id) }
+            finally { processing.remove(id); if (activePayment == null && purchaseActivity == "Confirming your purchase…") purchaseActivity = null }
         }
     }
     private fun update(op: JSONObject, status: String, error: String?) {

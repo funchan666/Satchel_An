@@ -46,10 +46,16 @@ import java.util.Locale
         Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) { listOf(1 to "Journal", 2 to "Travel guide").forEach { (i,title) -> SurfaceCard(Modifier.weight(1f).clickable { switch(i) }, if (i == 1) "button_paper" else "button_selected") { Artwork(if (i == 1) "journal_mark_v2" else "guide_mark_v2", Modifier.size(42.dp)); Text(tr(title), color=ink, fontWeight=FontWeight.SemiBold); Caption(tr(if(i==1) "Save travel memories" else "Ideas for your journey")) } } }
     } }
 }
-@Composable fun TripCard(store: TravelStore, trip: Trip, tr: (String)->String, journal: Boolean = false, open: ()->Unit) {
+@Composable fun TripCard(store: TravelStore, trip: Trip, tr: (String)->String, journal: Boolean = false, searchTerm: String = "", open: ()->Unit) {
+    val entry = if (journal) trip.entries.sortedByDescending { it.date }.firstOrNull { searchTerm.isEmpty() || trip.destination.contains(searchTerm, true) || it.text.contains(searchTerm, true) } else null
+    val photo = if (journal) entry?.photos?.firstOrNull() ?: trip.cover else trip.cover
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(cream).clickable(onClick=open)) {
-        Box { Photo(store, trip.cover, Modifier.fillMaxWidth().height(180.dp)); if (trip.favorite) Artwork("favorite_on", Modifier.padding(8.dp).size(48.dp)) }
-        Column(Modifier.padding(17.dp), verticalArrangement=Arrangement.spacedBy(8.dp)) { Head(trip.destination); Caption("${trip.start} — ${trip.end}"); Caption(if(journal) "${trip.entries.size} · ${tr("Memories")}" else "${trip.items.count { it.packed }} / ${trip.items.size} · ${tr("Packing")}") }
+        if (!journal || photo != null) Box { Photo(store, photo, Modifier.fillMaxWidth().height(180.dp)); if (!journal && trip.favorite) Artwork("favorite_on", Modifier.padding(8.dp).size(48.dp)) }
+        Column(Modifier.padding(17.dp), verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Head(trip.destination)
+            if (journal) { Caption("${trip.entries.size} · ${tr("Memories")}"); entry?.let { Caption(it.date); if (it.text.isNotEmpty()) Text(it.text, color=ink, maxLines=3) } }
+            else { Caption("${trip.start} — ${trip.end}"); Caption("${trip.items.count { it.packed }} / ${trip.items.size} · ${tr("Packing")}") }
+        }
     }
 }
 @Composable fun JournalScreen(store: TravelStore, tr: (String)->String, create: ()->Unit, open: (String)->Unit, add: (String)->Unit) {
@@ -62,7 +68,7 @@ import java.util.Locale
             Head(tr(if (query.isEmpty()) "Your memories start here." else "No matching memories"))
             if (trips.isEmpty()) Action("New Trip", tr, artwork="action_add", onClick=create)
             if (query.isEmpty()) { Head(tr("A little inspiration")); listOf("journal_idea_place" to "A place worth remembering", "journal_idea_moment" to "A moment that made you smile", "journal_idea_photo" to "A photo and the story behind it").forEach { (art, title)-> Row(verticalAlignment=Alignment.CenterVertically) { Artwork(art,Modifier.size(64.dp)); Text(tr(title),Modifier.padding(start=12.dp), color=ink) } } }
-        } else matches.forEach { TripCard(store,it,tr,true) { open(it.id) } }
+        } else matches.forEach { TripCard(store,it,tr,true,term) { open(it.id) } }
     } }
 }
 private val guide = listOf(
@@ -101,7 +107,7 @@ private val guide = listOf(
         Action("Satchel Membership",tr,false,"membership_art") { open("membership") }
         Action("Common list",tr,false,"sea_trips") { open("template") }
         Action("Export your journal",tr,false,"sea_journal") { export.launch("Satchel.json") }
-        Action("Restore purchases",tr,false) { billing.refreshPurchases() }; Caption(billing.status)
+        Action("Restore purchases",tr,false) { billing.refreshPurchases() }; Caption(tr(billing.status))
         if (ads.privacyRequired) Action("Privacy options",tr,false) { ads.privacyOptions() }
         Action("Privacy policy",tr,false) { open("privacy") }; Action("Terms of use",tr,false) { open("terms") }
         Head(tr("Language")); listOf("en" to "English", "zh-Hans" to "简体中文", "zh-Hant" to "繁體中文", "ja" to "日本語", "ko" to "한국어", "es" to "Español", "fr" to "Français", "de" to "Deutsch", "pt" to "Português").forEach { (code,label) -> Action(label,{it},language==code) { setLanguage(code) } }
@@ -119,7 +125,7 @@ private val guide = listOf(
 @Composable fun MembershipScreen(tr: (String)->String, billing: PlayProducts, open: (String)->Unit, back: ()->Unit) {
     val context = LocalContext.current
     ScrollPage { ContentColumn {
-        Back(tr,back); Artwork("membership_art",Modifier.fillMaxWidth().height(200.dp)); Head(tr("Satchel Membership")); Caption(tr("More room for every journey.")); Caption(billing.status)
+        Back(tr,back); Artwork("membership_art",Modifier.fillMaxWidth().height(200.dp)); Head(tr("Satchel Membership")); Caption(tr("More room for every journey.")); Caption(tr(billing.status))
         SurfaceCard(Modifier.fillMaxWidth()) { Caption(tr("Free: up to 3 trips and 30 photos. Membership: unlimited trips and photos.")); Caption(tr("Free: one travel question per day. Membership: unlimited questions.")); Caption(tr("Your saved trips remain available to view and export even if membership ends.")) }
         listOf(MONTHLY, YEARLY).forEach { id ->
             val monthly = id == MONTHLY
@@ -133,7 +139,7 @@ private val guide = listOf(
                 else if (offer == null) Action("Refresh products",tr,false) { billing.queryProducts() }
             }
         }
-        Caption("Subscriptions renew automatically until cancelled in Google Play.")
+        Caption(tr("Subscriptions renew automatically until cancelled in Google Play."))
         Action("Restore purchases",tr,false) { billing.refreshPurchases() }
         Action("Manage subscriptions",tr,false) { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/account/subscriptions"))) } catch (_: Exception) { } }
         Action("Privacy policy",tr,false) { open("privacy") }; Action("Terms of use",tr,false) { open("terms") }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.AtomicFile
 import android.util.Base64
+import android.util.Base64OutputStream
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,7 +15,7 @@ import java.time.LocalDate
 import java.util.UUID
 
 private fun id() = UUID.randomUUID().toString()
-data class Item(val id: String = id(), val name: String, val category: String, val quantity: Int = 1, val location: String = "", val notes: String = "", val photo: String? = null, val packed: Boolean = false, val returned: Boolean = false, val needsReturn: Boolean = true, val suggestedNameKey: String? = null, val suggestedCategoryKey: String? = null)
+data class Item(val id: String = id(), val name: String, val category: String, val quantity: Int = 1, val location: String = "", val notes: String = "", val photo: String? = null, val packed: Boolean = false, val returned: Boolean = false, val needsReturn: Boolean = true, val suggestedNameKey: String? = null, val suggestedCategoryKey: String? = null) : java.io.Serializable
 data class Entry(val id: String = id(), val date: String, val text: String = "", val photos: List<String> = emptyList())
 data class Trip(val id: String = id(), val destination: String, val start: String, val end: String, val kind: String = "leisure", val cover: String? = null, val favorite: Boolean = false, val items: List<Item> = emptyList(), val entries: List<Entry> = emptyList(), val packingPhotos: List<String> = emptyList(), val packingPhotoNotes: Map<String, String> = emptyMap(), val lessons: String = "")
 private fun String?.jsonValue(): Any = this ?: JSONObject.NULL
@@ -82,10 +83,24 @@ class TravelStore(private val context: Context, private val billing: PlayProduct
     fun export(uri: Uri): Boolean {
         if (!writable) { error = "Your journal could not be exported. Please try again."; return false }
         return try {
-            val encoded = JSONObject()
-            photos(trips).sorted().forEach { name -> encoded.put(name, Base64.encodeToString(requireNotNull(photoFile(name)).readBytes(), Base64.NO_WRAP)) }
-            val data = JSONObject().put("formatVersion", 1).put("trips", JSONArray(trips.map { it.json() })).put("commonList", JSONArray(template.map { it.json() })).put("photos", encoded)
-            requireNotNull(context.contentResolver.openOutputStream(uri)).use { it.write(data.toString().toByteArray()) }; true
+            requireNotNull(context.contentResolver.openOutputStream(uri)).use { output ->
+                fun write(text: String) = output.write(text.toByteArray(Charsets.UTF_8))
+                write("{\"formatVersion\":1,\"trips\":")
+                write(JSONArray(trips.map { it.json() }).toString())
+                write(",\"commonList\":")
+                write(JSONArray(template.map { it.json() }).toString())
+                write(",\"photos\":{")
+                photos(trips).sorted().forEachIndexed { index, name ->
+                    if (index > 0) write(",")
+                    write(JSONObject.quote(name)); write(":\"")
+                    requireNotNull(photoFile(name)).inputStream().use { input ->
+                        Base64OutputStream(output, Base64.NO_WRAP or Base64.NO_CLOSE).use { input.copyTo(it) }
+                    }
+                    write("\"")
+                }
+                write("}}")
+            }
+            true
         } catch (_: Exception) { error = "Could not export your journal. Please try again."; false }
     }
 }
