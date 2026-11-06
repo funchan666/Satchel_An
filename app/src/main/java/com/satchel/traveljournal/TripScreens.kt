@@ -17,6 +17,10 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.*
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -29,11 +33,13 @@ import java.util.UUID
     val library = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> if(uri != null) store.savePhoto(uri)?.let(onPhoto) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val path = pending
-        if (ok && path != null) {
-            val uri = FileProvider.getUriForFile(context, context.packageName + ".photos", File(path))
-            store.savePhoto(uri)?.let(onPhoto)
-        }
-        path?.let { File(it).delete() }; pending = null
+        try {
+            if (ok && path != null) {
+                val uri = FileProvider.getUriForFile(context, context.packageName + ".photos", File(path))
+                store.savePhoto(uri)?.let(onPhoto)
+            }
+        } catch (_: Exception) { store.error = "Could not load the photo. Please try again." }
+        finally { path?.let { File(it).delete() }; pending = null }
     }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
         Action(label,tr,false,"action_photo") { library.launch("image/*") }
@@ -48,12 +54,16 @@ import java.util.UUID
     }
 }
 
-@Composable fun TripScreen(store: TravelStore, tr: (String)->String, trip: Trip, section: Int, selectSection: (Int)->Unit, back: ()->Unit, editTrip: ()->Unit, editItem: (String)->Unit, editEntry: (String)->Unit, navigate: (String)->Unit) {
+@Composable fun TripScreen(store: TravelStore, tr: (String)->String, trip: Trip, section: Int, selectSection: (Int)->Unit, back: ()->Unit, editTrip: ()->Unit, editItem: (String)->Unit, editEntry: (String)->Unit, navigate: (String)->Unit, openPackingPhoto: (String)->Unit) {
     var returning by rememberSaveable { mutableStateOf(false) }; var onlyRemaining by rememberSaveable { mutableStateOf(false) }; var saved by rememberSaveable { mutableStateOf(false) }
     ScrollPage { ContentColumn {
         Back(tr,back); Photo(store,trip.cover,Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(18.dp)))
-        Row(verticalAlignment=Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Head(trip.destination); Caption("${trip.start} — ${trip.end}") }; Box(Modifier.size(52.dp).clickable { store.update(trip.copy(favorite=!trip.favorite)) }) { Artwork(if(trip.favorite) "favorite_on" else "favorite_off",Modifier.fillMaxSize()) } }
+        Row(verticalAlignment=Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Head(trip.destination); Caption("${dateLabel(trip.start)} — ${dateLabel(trip.end)}") }; Box(Modifier.size(52.dp).clickable { store.update(trip.copy(favorite=!trip.favorite)) }.semantics { contentDescription = tr(if (trip.favorite) "Remove from favorites" else "Save trip to favorites") }) { Artwork(if(trip.favorite) "favorite_on" else "favorite_off",Modifier.fillMaxSize()) } }
         Action("Edit trip",tr,false) { editTrip() }
+        PhotoActions(store,tr,"Change cover") { name ->
+            val current = store.trips.firstOrNull { it.id == trip.id }
+            if (current == null || !store.update(current.copy(cover=name))) store.discardPhoto(name)
+        }
         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { listOf("Packing", "Journal").forEachIndexed { i, label -> Action(label,tr,section==i) { selectSection(i) } } }
         if(section == 0) {
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { Action("Packing",tr,!returning) { returning=false }; Action("Returning",tr,returning) { returning=true } }
@@ -65,19 +75,30 @@ import java.util.UUID
             list.groupBy { it.displayCategory(tr) }.toSortedMap().forEach { (category,items)->
                 Head(category); items.forEach { item ->
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cream).padding(8.dp),verticalAlignment=Alignment.CenterVertically) {
-                        Box(Modifier.size(48.dp).clickable(enabled = !returning || item.needsReturn) { val updated=if(returning) item.copy(returned=!item.returned) else item.copy(packed=!item.packed); store.update(trip.copy(items=trip.items.map { if(it.id==item.id) updated else it })) }) { Artwork(if(if(returning) item.returned else item.packed) "sea_check_on" else "sea_check_off",Modifier.fillMaxSize()) }
+                        Box(Modifier.size(48.dp).clickable(enabled = !returning || item.needsReturn) { val updated=if(returning) item.copy(returned=!item.returned) else item.copy(packed=!item.packed); store.update(trip.copy(items=trip.items.map { if(it.id==item.id) updated else it })) }.semantics { contentDescription = item.displayName(tr); stateDescription = tr(if (if(returning) item.returned else item.packed) "Selected" else "Not selected") }) { Artwork(if(if(returning) item.returned else item.packed) "sea_check_on" else "sea_check_off",Modifier.fillMaxSize()) }
                         Column(Modifier.weight(1f).clickable { editItem(item.id) }.padding(8.dp)) { Text(item.displayName(tr), color=ink, fontWeight=FontWeight.SemiBold); Caption("${item.quantity} ${if(item.location.isNotBlank()) "· ${item.location}" else ""}"); if (returning && !item.needsReturn) Caption(tr("Not returning")) }
                     }
                 }
             }
             Action("Save as common list",tr,false) { if(store.saveTemplate(trip.items.map { it.copy(id=UUID.randomUUID().toString(),packed=false,returned=false,photo=null) })) saved=true }
             if(saved) Caption(tr("Common list saved"))
-            Action("Packing photos",tr,false,"action_photo") { navigate("packingPhotos") }
+            Head(tr("Packing photos"))
+            if (trip.packingPhotos.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                trip.packingPhotos.forEach { name -> Photo(store,name,Modifier.size(width=130.dp,height=105.dp).clip(RoundedCornerShape(10.dp)).clickable { openPackingPhoto(name) }) }
+            }
+            PhotoActions(store,tr) { name ->
+                val current = store.trips.firstOrNull { it.id == trip.id }
+                if (current == null || !store.update(current.copy(packingPhotos=current.packingPhotos+name))) store.discardPhoto(name)
+            }
+            Action("Packing photos",tr,false,"action_photo") { openPackingPhoto("") }
             SurfaceCard(Modifier.fillMaxWidth().clickable { navigate("lessons") }) { Head(tr("Notes for next time")); if(trip.lessons.isNotBlank()) Caption(trip.lessons) }
         } else {
             Action("Add a memory",tr,artwork="action_add") { editEntry("") }
             if(trip.entries.isEmpty()) { Artwork("sea_journal",Modifier.fillMaxWidth().height(180.dp)); Head(tr("Your memories start here.")) }
-            trip.entries.sortedByDescending { it.date }.forEach { entry -> SurfaceCard(Modifier.fillMaxWidth().clickable { editEntry(entry.id) }) { Head(entry.date); entry.photos.forEach { Photo(store,it,Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(12.dp))) }; Text(entry.text,color=ink) } }
+            trip.entries.sortedByDescending { it.date }.groupBy { it.date.take(10) }.forEach { (day, entries) ->
+                Head(dateLabel(day, long=true))
+                entries.forEach { entry -> SurfaceCard(Modifier.fillMaxWidth().clickable { editEntry(entry.id) }) { Caption(timeLabel(entry.date)); entry.photos.forEach { Photo(store,it,Modifier.fillMaxWidth().heightIn(max=600.dp).clip(RoundedCornerShape(12.dp)),ContentScale.Fit, fallback=false) }; if (entry.text.isNotEmpty()) Text(entry.text,color=ink) } }
+            }
         }
     } }
 }
@@ -104,7 +125,7 @@ private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTi
             }
         }
         Action("Cancel",tr,false) { cancel() }
-        if(old!=null) { if(confirm) { Caption(tr("Delete this trip and its records?")); Action("Delete",tr,false,"action_delete") { if(store.delete(old)) done() }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
+        if(old!=null) { if(confirm) { Caption(tr("Delete this trip and its records?")); Action("Delete",tr,false,"action_delete") { if(store.delete(old)) { store.discardPhoto(cover); done() } }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
     } }
 }
 @Composable fun ItemEditor(store: TravelStore, tr: (String)->String, trip: Trip, old: Item?, done: ()->Unit) {
@@ -120,7 +141,7 @@ private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTi
         if(invalid) Text(tr("Please enter a name and category."),color=Color(0xFFA6472E))
         Action("Save",tr,artwork="action_save") { if(name.isBlank() || category.isBlank()) invalid=true else { val item=(old ?: Item(name=name,category=category)).copy(name=name.trim(),category=category.trim(),quantity=quantity,location=location,notes=notes,photo=photo,needsReturn=needsReturn,suggestedNameKey=old?.suggestedNameKey?.takeIf { name.trim() == old?.displayName(tr) },suggestedCategoryKey=old?.suggestedCategoryKey?.takeIf { category.trim() == old?.displayCategory(tr) }); val list=if(old==null) trip.items+item else trip.items.map { if(it.id==item.id) item else it }; if(store.update(trip.copy(items=list))) done() } }
         Action("Cancel",tr,false) { cancel() }
-        if(old!=null) { if(confirm) { Action("Delete",tr,false,"action_delete") { if(store.update(trip.copy(items=trip.items.filterNot { it.id==old.id }))) done() }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
+        if(old!=null) { if(confirm) { Action("Delete",tr,false,"action_delete") { if(store.update(trip.copy(items=trip.items.filterNot { it.id==old.id }))) { store.discardPhoto(photo); done() } }; Action("Cancel",tr,false) { confirm=false } } else Action("Delete",tr,false,"action_delete") { confirm=true } }
     } }
 }
 @Composable fun EntryEditor(store: TravelStore, tr: (String)->String, trip: Trip, old: Entry?, done: ()->Unit) {
@@ -137,10 +158,28 @@ private fun date(value: String): LocalDate? = try { LocalDate.parse(value,DateTi
     } }
 }
 @Composable fun LessonsEditor(store: TravelStore, tr: (String)->String, trip: Trip, done: ()->Unit) { var text by rememberSaveable { mutableStateOf(trip.lessons) }; ScrollPage { ContentColumn { Back(tr,done); Hero("journal_coast",150); Field(tr("Notes for next time"),text,{text=it},true); Action("Save",tr,artwork="action_save") { if(store.update(trip.copy(lessons=text))) done() }; Action("Cancel",tr,false, onClick=done) } } }
-@Composable fun PackingPhotosScreen(store: TravelStore, tr: (String)->String, trip: Trip, done: ()->Unit) {
-    var editing by rememberSaveable { mutableStateOf<String?>(null) }; var note by rememberSaveable { mutableStateOf("") }; var confirm by rememberSaveable { mutableStateOf(false) }
-    BackHandler(editing != null) { editing = null }
-    ScrollPage { ContentColumn { Back(tr) { if(editing!=null) editing=null else done() }; Head(tr("Packing photos")); if(editing==null) { PhotoActions(store,tr) { name -> if(!store.update(trip.copy(packingPhotos=trip.packingPhotos+name))) store.discardPhoto(name) }; trip.packingPhotos.forEach { p -> Column(Modifier.clickable { editing=p; note=trip.packingPhotoNotes[p].orEmpty(); confirm=false }) { Photo(store,p,Modifier.fillMaxWidth().height(200.dp)); Caption(trip.packingPhotoNotes[p].orEmpty()) } } } else { val p=editing!!; Photo(store,p,Modifier.fillMaxWidth().height(240.dp)); Field(tr("Notes"),note,{note=it},true); Action("Save",tr) { if(store.update(trip.copy(packingPhotoNotes=trip.packingPhotoNotes+(p to note)))) editing=null }; if(confirm) Action("Delete",tr,false,"action_delete") { if(store.update(trip.copy(packingPhotos=trip.packingPhotos-p,packingPhotoNotes=trip.packingPhotoNotes-p))) editing=null } else Action("Delete",tr,false,"action_delete") { confirm=true } } } }
+@Composable fun PackingPhotosScreen(store: TravelStore, tr: (String)->String, trip: Trip, initialPhoto: String, done: ()->Unit) {
+    var editing by rememberSaveable { mutableStateOf(initialPhoto.takeIf { it in trip.packingPhotos }) }; var note by rememberSaveable { mutableStateOf(trip.packingPhotoNotes[initialPhoto].orEmpty()) }; var confirm by rememberSaveable { mutableStateOf(false) }
+    fun closeEditor() { if (initialPhoto.isNotEmpty()) done() else editing = null }
+    BackHandler(editing != null) { closeEditor() }
+    ScrollPage { ContentColumn {
+        Back(tr) { if (editing != null) closeEditor() else done() }; Head(tr("Packing photos"))
+        if (editing == null) {
+            PhotoActions(store,tr) { name -> if(!store.update(trip.copy(packingPhotos=trip.packingPhotos+name))) store.discardPhoto(name) }
+            trip.packingPhotos.forEach { p -> Column(Modifier.clickable { editing=p; note=trip.packingPhotoNotes[p].orEmpty(); confirm=false }) { Photo(store,p,Modifier.fillMaxWidth().height(200.dp)); Caption(trip.packingPhotoNotes[p].orEmpty()) } }
+        } else {
+            val p = editing!!
+            Photo(store,p,Modifier.fillMaxWidth().heightIn(max=600.dp),ContentScale.Fit,fallback=false)
+            Field(tr("Notes"),note,{note=it},true)
+            Action("Save",tr) { if(store.update(trip.copy(packingPhotoNotes=trip.packingPhotoNotes+(p to note)))) closeEditor() }
+            Action("Cancel",tr,false) { closeEditor() }
+            if(confirm) {
+                Caption(tr("Delete this photo?"))
+                Action("Delete",tr,false,"action_delete") { if(store.update(trip.copy(packingPhotos=trip.packingPhotos-p,packingPhotoNotes=trip.packingPhotoNotes-p))) closeEditor() }
+                Action("Cancel",tr,false) { confirm=false }
+            } else Action("Delete",tr,false,"action_delete") { confirm=true }
+        }
+    } }
 }
 @Composable fun TemplateScreen(store: TravelStore, tr: (String)->String, done: ()->Unit) {
     var items by rememberSaveable { mutableStateOf(store.template.map { it.copy(name = it.displayName(tr), category = it.displayCategory(tr)) }) }; var name by rememberSaveable { mutableStateOf("") }; var category by rememberSaveable { mutableStateOf("") }

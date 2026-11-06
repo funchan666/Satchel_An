@@ -71,7 +71,7 @@ import org.json.JSONObject
             if (!starting && ads.privacyRequired) Box(Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(8.dp)) { Action("Privacy options", tr, false) { ads.privacyOptions() } }
         }
         if (!starting && route == null) LocalApp(billing, ads, backend)
-        if (starting) Box(Modifier.fillMaxSize().background(Color(0xFFFDF8E7)), contentAlignment = Alignment.Center) {
+        if (starting) Box(Modifier.fillMaxSize().background(Color(0xFFF2F0EB)), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 Artwork("launch_icon", Modifier.size(184.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { repeat(3) { Artwork("launch_stitch", Modifier.size(width=18.dp,height=8.dp)) } }
@@ -129,6 +129,7 @@ import org.json.JSONObject
                 return true
             }
             override fun onPageCommitVisible(view: WebView, url: String) { if (!initialFinished) probeRunning = true }
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) { canGoBack = view.canGoBack() }
             override fun onPageFinished(view: WebView, url: String) { canGoBack = view.canGoBack(); finish() }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) { if (request.isForMainFrame) fail() }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) { if (request.isForMainFrame && response.statusCode >= 400) fail() }

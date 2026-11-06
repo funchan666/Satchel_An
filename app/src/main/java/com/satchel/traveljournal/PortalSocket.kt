@@ -109,7 +109,7 @@ class PortalSocket(private val activity: Activity, private val backend: PortalBa
         }
         val id = data.optString("requestId"); val action = data.optString("action")
         if (id.length !in 1..128 || data.optInt("version", -1) != 1 || data.optString("platform") == "app") return
-        val params = data.optJSONObject("params") ?: JSONObject()
+        val params = data.optJSONObject("params") ?: return
         if (action !in setOf("pay", "ad.rewarded", "ad.interstitial", "subscription.getStatus", "subscription.getProducts", "subscription.purchase", "subscription.restore")) return
         when (action) {
             "subscription.getStatus" -> scope.launch { try { send(id, action, "available", data = backend.status()) } catch (_: Exception) { send(id, action, "failed", error = "user_query_failed") } }

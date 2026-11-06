@@ -12,6 +12,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 private fun id() = UUID.randomUUID().toString()
@@ -33,6 +36,14 @@ private fun JSONObject.trip(): Trip {
     return Trip(getString("id"), getString("destination"), getString("start"), getString("end"), optString("kind", "leisure"), stringOrNull("cover"), optBoolean("favorite"), optJSONArray("items")?.objects()?.map { it.item() } ?: emptyList(), optJSONArray("entries")?.objects()?.map { it.entry() } ?: emptyList(), optJSONArray("packingPhotos")?.strings() ?: emptyList(), notes.keys().asSequence().associateWith { notes.getString(it) }, optString("lessons"))
 }
 private fun Trip.json() = JSONObject().put("id", id).put("destination", destination).put("start", start).put("end", end).put("kind", kind).put("cover", cover.jsonValue()).put("favorite", favorite).put("items", JSONArray(items.map { it.json() })).put("entries", JSONArray(entries.map { it.json() })).put("packingPhotos", JSONArray(packingPhotos)).put("packingPhotoNotes", JSONObject(packingPhotoNotes)).put("lessons", lessons)
+private fun appleDate(value: LocalDateTime): Long = value.atZone(ZoneId.systemDefault()).toEpochSecond() - 978_307_200L
+private fun Entry.exportJson(): JSONObject = json().put("date", appleDate(LocalDateTime.parse(date, DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm"))))
+private fun Trip.exportJson(): JSONObject = json().apply {
+    put("start", appleDate(LocalDate.parse(start).atStartOfDay()))
+    put("end", appleDate(LocalDate.parse(end).atStartOfDay()))
+    remove("favorite"); put("isFavorite", favorite)
+    put("entries", JSONArray(entries.map { it.exportJson() }))
+}
 
 class TravelStore(private val context: Context, private val billing: PlayProducts) {
     private val dir = File(context.filesDir, "Satchel").apply { mkdirs() }
@@ -86,7 +97,7 @@ class TravelStore(private val context: Context, private val billing: PlayProduct
             requireNotNull(context.contentResolver.openOutputStream(uri)).use { output ->
                 fun write(text: String) = output.write(text.toByteArray(Charsets.UTF_8))
                 write("{\"formatVersion\":1,\"trips\":")
-                write(JSONArray(trips.map { it.json() }).toString())
+                write(JSONArray(trips.map { it.exportJson() }).toString())
                 write(",\"commonList\":")
                 write(JSONArray(template.map { it.json() }).toString())
                 write(",\"photos\":{")
