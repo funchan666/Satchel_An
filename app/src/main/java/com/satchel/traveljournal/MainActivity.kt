@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
                     "packingPhotos" -> if (trip != null) PackingPhotosScreen(store, tr, trip, packingPhotoId) { page = "trip" }
                     "template" -> TemplateScreen(store, tr) { page = "home" }
                     "privacy", "terms" -> LegalScreen(page, tr) { page = legalReturnPage }
+                    else -> SideEffect { page = "home" }
                 }
             }
             if (page == "home" && WindowInsets.ime.getBottom(LocalDensity.current) == 0) Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).background(cream.copy(alpha=.9f), RoundedCornerShape(24.dp)), horizontalArrangement = Arrangement.SpaceEvenly) {
