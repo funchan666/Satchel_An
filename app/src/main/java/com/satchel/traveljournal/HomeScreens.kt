@@ -1,15 +1,8 @@
 package com.satchel.traveljournal
 
-import android.content.SharedPreferences
 import android.content.Intent
 import android.content.ClipData
-import android.net.Uri
-import android.app.Activity
 import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebResourceError
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
@@ -31,8 +24,6 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.Instant
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.text.Normalizer
@@ -118,34 +109,25 @@ private val guide = listOf(
     Triple("What should I check before flying?", "Check your passport and entry requirements with official sources, then confirm baggage rules and flight times with your airline. Keep documents, medication and a charger in your carry-on.", listOf("flight","fly","passport","airport","飞机","飛機","護照","护照","航班","飛行機","여권","비행","vuelo","vol","flug","voo")),
     Triple("How can I plan a travel budget?", "Start with transport and accommodation, then set a daily amount for food and activities. Keep a separate buffer for changes, and note the currency and payment fees.", listOf("budget","money","cost","预算","預算","花费","花費","予算","예산","presupuesto","custo","orçamento")),
     Triple("What should I pack for the beach?", "Bring sun protection, a hat, water and a quick-dry layer. Add a small waterproof pouch and check local conditions before swimming.", listOf("beach","sea","seaside","海边","海邊","海滩","海灘","海水浴","해변","playa","plage","strand","praia")))
-@Composable fun GuideScreen(tr: (String)->String, prefs: SharedPreferences, billing: PlayProducts, openMembership: () -> Unit) {
-    var draft by rememberSaveable { mutableStateOf("") }; var all by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf(arrayListOf<String>()) }; var notice by rememberSaveable { mutableStateOf("") }
+@Composable fun GuideScreen(tr: (String)->String) {
+    var draft by rememberSaveable { mutableStateOf("") }; var all by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var pendingAnswer by rememberSaveable { mutableStateOf<String?>(null) }
     val scroll = rememberScrollState()
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     fun normalize(value: String) = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
-    fun usedFreeToday(): Boolean {
-        val last = prefs.getLong("guide_last_question_at", 0L)
-        return if (last > 0) Instant.ofEpochMilli(last).atZone(ZoneId.systemDefault()).toLocalDate() == LocalDate.now()
-        else prefs.getString("guide_day", "") == LocalDate.now().toString()
-    }
-    LaunchedEffect(billing.isMember) { notice = "" }
     LaunchedEffect(pendingAnswer) {
         val answer = pendingAnswer ?: return@LaunchedEffect
         delay(1_000)
         message = ArrayList(message + answer); pendingAnswer = null
     }
-    LaunchedEffect(message.size, pendingAnswer, notice) { if (message.isNotEmpty() || notice.isNotEmpty()) { withFrameNanos { }; scroll.animateScrollTo(scroll.maxValue) } }
+    LaunchedEffect(message.size, pendingAnswer) { if (message.isNotEmpty()) { withFrameNanos { }; scroll.animateScrollTo(scroll.maxValue) } }
     LaunchedEffect(keyboardVisible) { if (keyboardVisible) snapshotFlow { scroll.maxValue }.collect { scroll.scrollTo(it) } }
     fun ask(q: String) {
         val text = q.trim(); if (text.isEmpty() || pendingAnswer != null) return
-        if (billing.configured && !billing.ready) { notice = "Checking membership. Please try again in a moment."; return }
-        if (!billing.isMember && usedFreeToday()) { notice = "You have used today's free question. Come back tomorrow or become a member."; return }
-        if (!billing.isMember) prefs.edit().putLong("guide_last_question_at", System.currentTimeMillis()).putString("guide_day", LocalDate.now().toString()).apply()
         val normalized = normalize(text)
         val found = guide.firstOrNull { normalize(tr(it.first)) == normalized } ?: listOf(1,3,4,5,2,0).map { guide[it] }.firstOrNull { topic -> topic.third.any { normalize(it) in normalized } }
         val fallback = "I can help with packing, rain, flights, budgets, beaches and travel journals. Try one of these topics."
-        message = ArrayList(message + text); pendingAnswer = tr(found?.second ?: fallback); draft=""; notice=""
+        message = ArrayList(message + text); pendingAnswer = tr(found?.second ?: fallback); draft=""
     }
     ScrollPage(scroll) { Hero("guide_hero"); ContentColumn {
         if(message.isEmpty()) {
@@ -163,7 +145,6 @@ private val guide = listOf(
         }
         message.forEachIndexed { index,text -> SurfaceCard(Modifier.fillMaxWidth(),if(index % 2 == 0) "button_selected" else "button_paper") { SelectionContainer { Text(text,color=ink) } } }
         if (pendingAnswer != null) Caption(tr("Preparing a tip…"))
-        if(notice.isNotEmpty()) { Caption(tr(notice)); if ((!billing.configured || billing.ready) && !billing.isMember && usedFreeToday()) Action("Satchel Membership",tr,false,onClick=openMembership) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
             Box(Modifier.weight(1f)) { Field(tr("Ask a travel question"),draft,{draft=it}, multiline = true, placeholder = tr("Your travel question…"), minHeight = 48.dp) }
             Action("Send",tr,artwork="action_send") { ask(draft) }
@@ -178,13 +159,11 @@ private val guide = listOf(
         Artwork("next_mark", Modifier.padding(start = 8.dp).size(24.dp))
     }
 }
-@Composable fun SettingsScreen(store: TravelStore, tr: (String)->String, language: String, setLanguage: (String)->Unit, open: (String)->Unit, ads: PortalAds, backend: PortalBackend, billing: PlayProducts) {
+@Composable fun SettingsScreen(store: TravelStore, tr: (String)->String, language: String, setLanguage: (String)->Unit, open: (String)->Unit) {
     val context = LocalContext.current
     var showLanguages by rememberSaveable { mutableStateOf(false) }
-    var restoreRequested by rememberSaveable { mutableStateOf(false) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> if(uri != null) store.export(uri) }
     ScrollPage { Hero("collection_coast"); ContentColumn {
-        SurfaceCard(Modifier.fillMaxWidth(), "identity_ticket") { Caption(tr("User ID")); SelectionContainer { Head(backend.session?.userId ?: tr("Not available yet")) } }
         SurfaceCard(Modifier.fillMaxWidth(), "collection_paper_v2") {
             Text(tr("Your collection"), color=muted)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -192,10 +171,6 @@ private val guide = listOf(
                 Head("${store.trips.sumOf { it.entries.size }}  ${tr("Memories")}", Modifier.weight(1f))
             }
             Caption("${store.tripPhotoCount()}  ${tr("Photos")}")
-        }
-        SurfaceCard(Modifier.fillMaxWidth(), "coastal_paper") {
-            SettingsRow("Satchel Membership",tr,"membership_art") { open("membership") }
-            Caption(tr("More room for every journey."))
         }
         SurfaceCard(Modifier.fillMaxWidth()) {
         SettingsRow("Common list",tr,"sea_trips") { open("template") }
@@ -217,9 +192,6 @@ private val guide = listOf(
         }
         }
         SurfaceCard(Modifier.fillMaxWidth()) {
-        SettingsRow("Restore purchases",tr) { restoreRequested = true; billing.refreshPurchases() }
-        if (restoreRequested) Caption(tr(billing.status))
-        if (ads.privacyRequired) SettingsRow("Privacy options",tr) { ads.privacyOptions() }
         SettingsRow("Privacy policy",tr) { open("privacy") }; SettingsRow("Terms of use",tr) { open("terms") }
         }
         val languages = listOf("en" to "English", "zh-Hans" to "简体中文", "zh-Hant" to "繁體中文", "ja" to "日本語", "ko" to "한국어", "es" to "Español", "fr" to "Français", "de" to "Deutsch", "pt" to "Português")
@@ -230,46 +202,15 @@ private val guide = listOf(
     } }
 }
 @Composable fun LegalScreen(page: String, tr: (String)->String, back: ()->Unit) {
-    var local by rememberSaveable(page) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Back(tr,back)
-        Action(if (local) "View online policy" else "Android details",tr,false) { local = !local }
-        key(page, local) {
-            AndroidView(factory={ ctx -> WebView(ctx).apply {
-                settings.javaScriptEnabled=false; settings.allowFileAccess=false; settings.allowContentAccess=false
-                if (local) {
-                    loadDataWithBaseURL(null,ctx.assets.open(if(page=="privacy") "Privacy.html" else "Terms.html").bufferedReader().use { it.readText() },"text/html","UTF-8",null)
-                } else {
-                    webViewClient = object : WebViewClient() {
-                        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) { if (request.isForMainFrame) local = true }
-                        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) { if (request.isForMainFrame && response.statusCode >= 400) local = true }
-                    }
-                    loadUrl(if(page=="privacy") "https://www.satchel.click/privacy-policy.html" else "https://www.satchel.click/terms-of-use.html")
-                }
-            } },modifier=Modifier.weight(1f),onRelease={ it.stopLoading(); it.destroy() })
+        Back(tr, back)
+        key(page) {
+            AndroidView(factory = { ctx -> WebView(ctx).apply {
+                settings.javaScriptEnabled = false
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                loadDataWithBaseURL(null, ctx.assets.open(if (page == "privacy") "Privacy.html" else "Terms.html").bufferedReader().use { it.readText() }, "text/html", "UTF-8", null)
+            } }, modifier = Modifier.weight(1f), onRelease = { it.stopLoading(); it.destroy() })
         }
     }
-}
-@Composable fun MembershipScreen(tr: (String)->String, billing: PlayProducts, open: (String)->Unit, back: ()->Unit) {
-    val context = LocalContext.current
-    ScrollPage { ContentColumn {
-        Back(tr,back); Artwork("membership_art",Modifier.fillMaxWidth().height(200.dp)); Head(tr("Satchel Membership")); Caption(tr("More room for every journey.")); Caption(tr(billing.status))
-        SurfaceCard(Modifier.fillMaxWidth()) { Caption(tr("Free: up to 3 trips and 30 photos. Membership: unlimited trips and photos.")); Caption(tr("Free: one travel question per day. Membership: unlimited questions.")); Caption(tr("Your saved trips remain available to view and export even if membership ends.")) }
-        listOf(MONTHLY, YEARLY).forEach { id ->
-            val monthly = id == MONTHLY
-            val offer = billing.offers.firstOrNull { it.id == id }
-            val period = tr(if (monthly) "month" else "year")
-            SurfaceCard(Modifier.fillMaxWidth()) {
-                Head(tr(if (monthly) "Monthly membership" else "Yearly membership"))
-                if (offer != null) Text("${offer.price} / $period", color=ink)
-                else { Text((if(monthly) "US$9.99" else "US$99.99") + " / " + period, color=ink); Caption(tr("Planned price in USD")) }
-                if (offer != null && !billing.isMember && billing.ready) Action("Subscribe",tr) { (context as? Activity)?.let { billing.buy(it,id) } }
-                else if (offer == null) Action("Refresh products",tr,false) { billing.queryProducts() }
-            }
-        }
-        Caption(tr("Subscriptions renew automatically until cancelled in Google Play."))
-        Action("Restore purchases",tr,false) { billing.refreshPurchases() }
-        Action("Manage subscriptions",tr,false) { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/account/subscriptions"))) } catch (_: Exception) { } }
-        Action("Privacy policy",tr,false) { open("privacy") }; Action("Terms of use",tr,false) { open("terms") }
-    } }
 }

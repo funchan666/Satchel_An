@@ -45,7 +45,7 @@ private fun Trip.exportJson(): JSONObject = json().apply {
     put("entries", JSONArray(entries.map { it.exportJson() }))
 }
 
-class TravelStore(private val context: Context, private val billing: PlayProducts) {
+class TravelStore(private val context: Context) {
     private val dir = File(context.filesDir, "Satchel").apply { mkdirs() }
     private val file = AtomicFile(File(dir, "journal.json"))
     var trips by mutableStateOf<List<Trip>>(emptyList()); private set
@@ -63,12 +63,7 @@ class TravelStore(private val context: Context, private val billing: PlayProduct
     fun tripPhotoCount(): Int = photos(trips, emptyList()).size
     private fun persist(next: List<Trip>, common: List<Item>): Boolean {
         if (!writable) { error = "Your journal could not be opened; saving is disabled to protect existing data."; return false }
-        val oldTripPhotos = photos(trips, emptyList()); val newTripPhotos = photos(next, emptyList())
-        val addsContent = next.size > trips.size || (newTripPhotos - oldTripPhotos).isNotEmpty()
-        if (addsContent && billing.configured && !billing.ready) { error = "Checking membership. Please try again in a moment."; return false }
-        if (!billing.isMember && next.size > trips.size && next.size > 3) { error = "The free plan includes up to 3 trips. Membership unlocks unlimited trips."; return false }
         val before = photos(trips); val after = photos(next, common)
-        if (!billing.isMember && (newTripPhotos - oldTripPhotos).isNotEmpty() && newTripPhotos.size > 30) { error = "The free plan includes up to 30 photos. Membership unlocks unlimited photos."; return false }
         var stream: java.io.FileOutputStream? = null
         return try {
             val root = JSONObject().put("trips", JSONArray(next.map { it.json() })).put("commonList", JSONArray(common.map { it.json() }))

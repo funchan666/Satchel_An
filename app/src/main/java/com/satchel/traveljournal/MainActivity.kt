@@ -5,12 +5,8 @@ import android.app.Activity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
@@ -21,7 +17,6 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -30,21 +25,17 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.view.WindowCompat
 import android.graphics.BitmapFactory
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.media.ExifInterface
 import org.json.JSONObject
-import java.time.LocalDate
 
 val ink = Color(0xFF1F3345); val muted = Color(0xFF596B75); val ocean = Color(0xFF0847A3); val cream = Color(0xFFFFFCF5); val paper = Color(0xFFF7F9F5)
-class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { SatchelApp() } } }
+class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { LocalApp() } } }
 
-@Composable fun LocalApp(billing: PlayProducts, ads: PortalAds, backend: PortalBackend) {
+@Composable fun LocalApp() {
     val context = LocalContext.current
     DisposableEffect(context) {
         val activity = context as? Activity
@@ -53,7 +44,7 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
         controller?.isAppearanceLightStatusBars = true
         onDispose { if (previous != null) controller?.isAppearanceLightStatusBars = previous }
     }
-    val store = remember { TravelStore(context, billing) }
+    val store = remember { TravelStore(context) }
     val prefs = remember { context.getSharedPreferences("satchel", 0) }
     var language by remember { mutableStateOf(prefs.getString("language", "en") ?: "en") }
     val translations = remember { JSONObject(context.assets.open("translations.json").bufferedReader().use { it.readText() }) }
@@ -70,7 +61,7 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
     var detailSection by rememberSaveable { mutableIntStateOf(0) }
     val tabStates = rememberSaveableStateHolder()
     val trip = store.trips.firstOrNull { it.id == selectedId }
-    fun goBack() { page = when (page) { "trip", "new", "settings", "guide" -> "home"; "item", "tripEdit", "lessons", "packingPhotos" -> "trip"; "entry" -> entryReturnPage; "privacy", "terms" -> legalReturnPage; "template", "membership" -> "home"; else -> "home" } }
+    fun goBack() { page = when (page) { "trip", "new", "settings", "guide" -> "home"; "item", "tripEdit", "lessons", "packingPhotos" -> "trip"; "entry" -> entryReturnPage; "privacy", "terms" -> legalReturnPage; "template" -> "home"; else -> "home" } }
     BackHandler(page != "home") { goBack() }
     Box(Modifier.fillMaxSize().background(paper).windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
         Artwork("page_linen", Modifier.fillMaxSize(), ContentScale.Crop, alpha = .18f)
@@ -81,8 +72,8 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
                     "home" -> tabStates.SaveableStateProvider("tab-$tab") { when (tab) {
                         0 -> TripsScreen(store, tr, { page = "new" }, { selectedId = it; detailSection = 0; page = "trip" }, { tab = it })
                         1 -> JournalScreen(store, tr, { page = "new" }, { selectedId = it; detailSection = 1; page = "trip" }, { selectedId = it; entryId = ""; entryReturnPage = "home"; page = "entry" })
-                        2 -> GuideScreen(tr, prefs, billing) { page = "membership" }
-                        else -> SettingsScreen(store, tr, language, { language = it; prefs.edit().putString("language", it).apply() }, { legalReturnPage = "home"; page = it }, ads, backend, billing)
+                        2 -> GuideScreen(tr)
+                        else -> SettingsScreen(store, tr, language, { language = it; prefs.edit().putString("language", it).apply() }, { legalReturnPage = "home"; page = it })
                     } }
                     "new" -> TripEditor(store, tr, null, { page = "home" })
                     "trip" -> if (trip != null) TripScreen(store, tr, trip, detailSection, { detailSection = it }, { page = "home" }, { page = "tripEdit" }, { itemId = it; page = "item" }, { entryId = it; entryReturnPage = "trip"; page = "entry" }, { page = it }, { packingPhotoId = it; page = "packingPhotos" }) else { page = "home" }
@@ -93,7 +84,6 @@ class MainActivity : ComponentActivity() { override fun onCreate(savedInstanceSt
                     "packingPhotos" -> if (trip != null) PackingPhotosScreen(store, tr, trip, packingPhotoId) { page = "trip" }
                     "template" -> TemplateScreen(store, tr) { page = "home" }
                     "privacy", "terms" -> LegalScreen(page, tr) { page = legalReturnPage }
-                    "membership" -> MembershipScreen(tr, billing, { legalReturnPage = "membership"; page = it }) { page = "home" }
                 }
             }
             if (page == "home" && WindowInsets.ime.getBottom(LocalDensity.current) == 0) Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).background(cream.copy(alpha=.9f), RoundedCornerShape(24.dp)), horizontalArrangement = Arrangement.SpaceEvenly) {
