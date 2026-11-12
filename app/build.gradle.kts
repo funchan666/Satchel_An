@@ -8,7 +8,13 @@ plugins {
 android {
     namespace = "com.satchel.traveljournal"
     compileSdk = 36
-    defaultConfig { applicationId = "com.satchel.traveljournal"; minSdk = 26; targetSdk = 36; versionCode = 1; versionName = "1.0.0" }
+    defaultConfig { applicationId = "com.satchel.traveljournal"; minSdk = 26; targetSdk = 36; versionCode = 2; versionName = "1.0.1" }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
